@@ -108,9 +108,12 @@ class AcquisitionFreshness(unittest.TestCase):
             with patch('sbi_views._jst_now',return_value=NOW-timedelta(hours=1)):
                 save_observation(store,'C','口座サマリー','',{'cash_total':123})
             page=Mock();page.url='https://m.sbisec.co.jp/account';page.is_closed.return_value=False
-            page.frames=[page];page.locator.return_value.inner_text.return_value='Custom C 様 ログアウト'
+            page.frames=[page];page.locator.return_value.inner_text.return_value='Custom C 様 ログアウト 口座管理'
+            page.locator.return_value.count.return_value=0
+            page.locator.return_value.evaluate_all.return_value=[]
             playwright=Mock();browser=playwright.chromium.launch.return_value
             context=browser.new_context.return_value;context.pages=[page];context.new_page.return_value=page
+            page.context=context
             mocks={
                 'auto_login.autofill_login':Mock(return_value=True),
                 'auto_login._login_page':Mock(return_value=page),

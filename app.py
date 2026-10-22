@@ -283,30 +283,11 @@ class App:
         launch(self,BASE,online=True,accounts=(account,),assets_only=True)
 
     def show_assets(self):
-        from sbi_views import latest,_jst_now
-        from asset_snapshots import combine_assets
-        observations=latest(self.store,_jst_now().date().isoformat())
-        dialog=tk.Toplevel(self.root);dialog.title('取得時点の資産');dialog.geometry('1120x360');dialog.transient(self.root)
-        ttk.Label(dialog,text='取得時点の表示値です。未取得は空のまま保持し、過去の月末・月初へ代用しません。',padding=12).pack(anchor='w')
-        body=ttk.Frame(dialog,padding=12);body.pack(fill='both',expand=True)
-        columns=('account','summary_date','assets_date','domestic','foreign','cash','foreign_cash','usd_cash','growth','tsumitate')
-        tree=ttk.Treeview(body,columns=columns,show='headings',height=6)
-        labels=('口座','円サマリー取得日時','My資産取得日時','国内株式等（円）','外国株式（円）','円現金合計','外貨現金（円評価）','米ドル現金（ドル）','NISA成長枠','NISA積立枠')
-        for column,label in zip(columns,labels):
-            tree.heading(column,text=label);tree.column(column,width=170 if column.endswith('date') else 130,anchor='w')
-        for account in self.store.accounts():
-            summary=observations.get((account['id'],'口座サマリー'),{});assets=observations.get((account['id'],'My資産'),{})
-            sv=summary.get('values',{});av=assets.get('values',{});amounts=combine_assets(av)
-            cash=sv.get('cash_total') if sv.get('cash_total') is not None else amounts.get('cash')
-            def amount(value):return '未取得' if value is None else f'{value:,.2f}'.rstrip('0').rstrip('.')
-            limits=[sv.get(key,{}) for key in ('growth_remaining','tsumitate_remaining')]
-            values=[account['label'],summary.get('observed_at','未取得')[:19],assets.get('observed_at','未取得')[:19],
-                    amount(amounts['domestic']),amount(amounts['foreign']),amount(cash),amount(amounts['foreign_cash']),amount(av.get('usd_cash'))]
-            values.extend(amount(value.get('remaining'))+(f"（{value['year']}年）" if 'year' in value else '') for value in limits)
-            tree.insert('','end',values=values)
-        horizontal=ttk.Scrollbar(body,orient='horizontal',command=tree.xview);tree.configure(xscrollcommand=horizontal.set)
-        tree.pack(fill='both',expand=True);horizontal.pack(fill='x')
-        ttk.Button(dialog,text='閉じる',command=dialog.destroy).pack(pady=(0,12))
+        try:
+            from asset_dialog import show
+            show(self,BASE)
+        except (LedgerError,OSError,ValueError) as error:
+            messagebox.showerror('資産の確認',str(error))
 
     def record_assets(self):
         try:
@@ -315,7 +296,7 @@ class App:
             day=simpledialog.askstring('評価基準日','表示額の実際の基準日（YYYY-MM-DD）を入力。取得日を月末へ読み替えないでください。')
             if not day:return
             values={}
-            for key,label in [('domestic','国内株式等の円評価'),('foreign','外国株式の円評価'),('cash','証券預り金＋連携銀行預金の実残高（円）'),('foreign_cash','外貨現金の円評価')]:
+            for key,label in [('domestic','国内株式等の円評価'),('foreign','外国株式の円評価'),('cash','証券預り金＋連携銀行預金の実残高（円）'),('foreign_cash','外貨現金の円評価'),('growth_remaining','その基準日のNISA成長投資枠の残額（円）'),('tsumitate_remaining','その基準日のNISAつみたて投資枠の残額（円）')]:
                 v=simpledialog.askstring('資産額',label+'。不明は空欄、保有なしは0。買付余力を重ねて加算しないでください。')
                 if v is None:return
                 values[key]=v

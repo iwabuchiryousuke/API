@@ -18,6 +18,13 @@ HEADERS=['日付','国内株式等(円)','外国株式(円)','現金合計(円)'
 class HistoryEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.store=Store(self.tmp.name)
+        self.enterContext(patch('sbi_views.select_asset_page',side_effect=lambda page,**_:page))
+        def immediate(page,kind,**kwargs):
+            from sbi_views import snapshot_dom,parse_summary,parse_my_assets,parse_currency_summary
+            text,tables=snapshot_dom(page)
+            parser={'口座サマリー':parse_summary,'My資産':parse_my_assets,'口座(外貨建)':parse_currency_summary}[kind]
+            return text,tables,parser(text,tables)
+        self.enterContext(patch('sbi_asset_runtime.read_current_view',side_effect=immediate))
     def tearDown(self):
         self.store.close();self.tmp.cleanup()
 

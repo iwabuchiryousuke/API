@@ -65,7 +65,8 @@ def seed_observations(store):
         '口座サマリー': dict(cash_total=30001, broker_cash=10000, bank=20001,
                        growth_remaining={'year': 2026, 'remaining': 50001},
                        tsumitate_remaining={'year': 2026, 'remaining': 60001}),
-        'My資産': dict(domestic=10001, foreign=20001, cash=10000,
+        'My資産': dict(domestic=10001, fund=0, bond=0,
+                     foreign=20001, usd_fund=0, usd_bond=0, cash=10000,
                      bank=20001, foreign_cash=40001),
     }
     with store.db:

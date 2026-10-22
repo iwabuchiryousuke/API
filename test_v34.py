@@ -39,24 +39,27 @@ class Revision(unittest.TestCase):
         self.trade();register(self.store,self.a,'A','1234','2026-02-01',1,3,'通知')
         with self.assertRaises(LedgerError):register(self.store,self.a,'A','1234','2026-02-01',1,3,'通知')
     def test_assets_table_value_not_profit(self):
-        table=[['商品','評価損益','評価額(円)'],['国内株式(現物)','500','1000'],['米国株式','20','200'],['預り金(円)','0','300'],['預り金(米ドル)','0','400'],['ハイブリッド預金','0','500']]
+        table=[['商品','評価損益','評価額(円)'],['国内株式(現物)','500','1000'],['米国株式','20','200'],['預り金(円)','0','300'],['預り金(米ドル)','0','400'],['ハイブリッド預金','0','500'],['投資信託','0','0'],['円貨建債券','0','0'],['外貨建MMF(米ドル建て)','0','0'],['外貨建債券(米ドル建て)','0','0']]
         capture_page(self.store,'A','更新日時 2026/09/30 16:00',[table])
         s=snapshots(self.store)['A','2026-09-30'];self.assertEqual(s['domestic'],1000);self.assertEqual(s['cash'],800);self.assertEqual(s['foreign_cash'],400)
         self.assertNotIn(('A','2026-10-01'),snapshots(self.store))
     def test_dollars_not_yen_and_unknown_bank(self):
         rows=[['商品','評価額'],['米国株式','100 USD'],['預り金(円)','20円']]
         v=extract_observations('',[rows]);self.assertIsNone(v.get('foreign'))
-        capture_page(self.store,'A','評価基準日 2026/10/01\n国内株式\n100円\n預り金(円)\n20円')
+        capture_page(self.store,'A','評価基準日 2026/10/01\n国内株式\n100円\n投資信託\n0円\n円貨建債券\n0円\n預り金(円)\n20円')
         self.assertIsNone(snapshots(self.store)['A','2026-10-01']['cash'])
     def test_explicit_dated_history(self):
         rows=[['日付','国内株式等(円)','現金合計(円)'],['2026/09/30','100','20'],['2026/10/01','110','25']]
         self.assertEqual(capture_history(self.store,'A',[rows]),2)
         self.assertEqual(snapshots(self.store)['A','2026-10-01']['domestic'],110)
-    def test_month_start_from_explicit_monthly_change(self):
-        from asset_snapshots import capture_month_start
+    def test_monthly_change_does_not_infer_calendar_boundary(self):
+        from asset_snapshots import capture_month_start,save
         rows=[['商品','評価額(円)','前月比(円)'],['国内株式','1100','+100'],['米国株式','200','-20'],['預り金(円)','300','0'],['ハイブリッド預金','400','+50'],['預り金(米ドル)','0','0']]
-        self.assertEqual(capture_month_start(self.store,'A','更新日時 2026/10/20',[rows]),1)
-        v=snapshots(self.store)['A','2026-10-01'];self.assertEqual(v['domestic'],1000);self.assertEqual(v['foreign'],220);self.assertEqual(v['cash'],650)
+        save(self.store,'A','2026-10-01',{'domestic':999},note='手動確認値を保持')
+        before=snapshots(self.store)
+        self.assertEqual(capture_month_start(self.store,'A','更新日時 2026/10/20',[rows]),0)
+        self.assertEqual(snapshots(self.store),before)
+        self.assertEqual(snapshots(self.store)['A','2026-10-01']['domestic'],999)
         self.assertNotIn(('A','2026-09-30'),snapshots(self.store))
     def test_six_digit_fields(self):
         fields=[MagicMock() for _ in range(6)];fill_otp(fields,'123456')

@@ -24,10 +24,12 @@ class PersistenceFailure(unittest.TestCase):
         self.addCleanup(self.stage.close)
         self.page=Mock();self.page.url='https://m.sbisec.co.jp/account'
         self.page.is_closed.return_value=False;self.page.frames=[self.page]
-        self.page.locator.return_value.inner_text.return_value='Anonymous C 様 ログアウト'
+        self.page.locator.return_value.inner_text.return_value='Anonymous C 様 ログアウト 口座管理'
+        self.page.locator.return_value.count.return_value=0
         self.pw=Mock();self.browser=self.pw.chromium.launch.return_value
         context=self.browser.new_context.return_value
         context.new_page.return_value=self.page;context.pages=[self.page]
+        self.page.context=context
         self.messages=[]
         self.journal=Mock(wraps=persist_capture)
         self.mocks={

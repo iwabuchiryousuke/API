@@ -1,48 +1,60 @@
 {
-  "version": "3.5.13",
-  "baseline_commit": "e1b5d77955360e6e4149d1aac3982797b0b4d36c",
-  "tests": 395,
+  "version": "3.5.14",
+  "baseline_commit": "26d9cc659c546a6a69d33fd2df703c38ca90c226",
+  "tests": 492,
   "failures": 0,
   "errors": 0,
   "skipped": 0,
   "expected_failures": 0,
   "unexpected_successes": 0,
-  "seconds": 43.314,
+  "seconds": 75.862,
   "successful": true,
-  "test_source": "isolated extraction of code release ZIP; subsequent documentation-only results update",
-  "offline_browser_tests": 28,
-  "code_update_tests": 31,
+  "test_source": "isolated extraction of code release ZIP; subsequent documentation-only result update",
+  "offline_browser_tests": 40,
   "packaged_tests": {
-    "tests": 395,
+    "tests": 492,
     "failures": 0,
     "errors": 0,
     "skipped": 0
   },
   "source_data": {
-    "files_unchanged": 254,
+    "original_files_unchanged": 254,
     "pdf_files": 155,
     "unique_pdf_documents": 99,
     "supported_documents": 59,
     "explicit_exclusions": 40,
-    "latest_upload_read": false,
-    "latest_upload_blocker": "32 MiB executor transfer limit"
+    "original_uploaded_trades": 28,
+    "latest_screenshot_trades": 79,
+    "latest_ledger_verified": false,
+    "actual_nisa_transfer_pdf_verified": false,
+    "earlier_large_zip_read": false
   },
   "excel": {
-    "uploaded_data_ooxml_entries_identical": 8,
+    "original_data_ooxml_entries_identical": 8,
     "golden_standard_entries": 8,
     "golden_management_entries": 13,
-    "exporter_or_layout_changed": false
+    "layout_or_formulas_changed": false,
+    "legacy_estimate_note_disclaimer_added": true
+  },
+  "asset_history": {
+    "unobserved_past_dates_reconstructed": false,
+    "monthly_difference_derivation_retired": true,
+    "intraday_reference_explicitly_labelled": true,
+    "background_scheduling_added": false,
+    "unobserved_components_treated_as_zero": false
   },
   "release_upgrade": {
-    "from_version": "3.5.12",
-    "to_version": "3.5.13",
-    "changed_files": 31,
+    "from_version": "3.5.13",
+    "to_version": "3.5.14",
+    "changed_files": 41,
     "manifest_verified": true,
-    "protected_fixtures_unchanged": true,
+    "protected_fixture_hashes_unchanged": true,
     "repeat_no_changes": true,
-    "backup_manifest_verified": true
+    "backup_manifest_present": true,
+    "requirements_changed": false
   },
   "live_sbi_tested": false,
   "windows_tested": false,
-  "code_zip_sha256": "486df59cf4b3518a5b2281a769b3a886df5793d8d18a76cbebbaab5c160a4ae6"
+  "code_zip_sha256": "5bbff6c8e299e17bda43bc96530dfb8b64a0877d220cdbb244a0d2d3d037e931",
+  "runtime_and_tests_match_verified_package": true
 }

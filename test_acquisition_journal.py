@@ -115,6 +115,18 @@ class CaptureJournal(unittest.TestCase):
         self.assertIsNone(self.persist())
         self.assertFalse((self.base/'data/acquisitions').exists())
 
+    def test_all_fresh_intraday_observations_and_validated_capture_window_survive(self):
+        observation(self.source,stamp=FRESH,values={'cash_total':123})
+        observation(self.source,stamp=FRESH+timedelta(minutes=1),values={'cash_total':456})
+        path=self.persist();data=json.loads(path.read_text())
+        self.assertEqual([row['payload']['values']['cash_total'] for row in data['observations']],[123,456])
+        result=replay_captures(self.base,self.stage)
+        self.assertEqual(result['observations'],2)
+        self.assertEqual(result['windows'],[{'account':'C','since':START.isoformat(),'acquired_at':data['acquired_at']}])
+        again=replay_captures(self.base,self.stage)
+        self.assertEqual(again['observations'],0)
+        self.assertEqual(again['windows'],result['windows'])
+
     def test_naive_since_is_rejected_and_database_is_untouched(self):
         observation(self.source);before=fingerprint(self.source.db)
         with self.assertRaises(JournalError):persist_capture(self.base,'C',OWNER,self.source,START.replace(tzinfo=None))

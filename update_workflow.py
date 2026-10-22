@@ -55,6 +55,7 @@ class Summary:
     balance_reports:int=0
     assets_observed:int=0
     recovered_asset_accounts:int=0
+    daily_asset_records:int=0
 
 class Workflow:
     def __init__(self,base,progress=None,cancelled=None):
@@ -131,6 +132,18 @@ class Workflow:
                         if missing:self.state['warnings'].append(f'ASSET_FIELDS_MISSING:{account}:'+','.join(missing))
                     if collection_errors:raise UpdateError('COLLECTION_INCOMPLETE','収集を完了できなかった口座があります。保存済みPDFは保持しています。\n'+'\n'.join(collection_errors))
                 else:self.state['warnings'].append('SAVED_FILES_ONLY')
+                if collect:
+                    # Include freshly persisted captures in the same validated
+                    # grouping used by an offline retry; replay is idempotent.
+                    fresh=replay_captures(self.base,stage,accounts=selected)
+                    replayed['windows']=fresh['windows']
+                    self.state['warnings'].extend(w for w in fresh['warnings'] if w not in self.state['warnings'])
+                from asset_history import stage_boundary_observations
+                for account in (a for a in selected if a!='E'):
+                    daily=stage_boundary_observations(stage,account,self.target_dates,acquisition_windows=replayed['windows'])
+                    summary.daily_asset_records+=daily['count']
+                    proposal.extend(daily['proposal'])
+                    self.state['warnings'].extend(daily['warnings'])
                 for account in (selected if include_saved_pdfs else ()):
                     self.check_cancel();self.emit('CHECKING_PDF',account)
                     known={r[0] for table in ('imports','activity_files','balance_reports') for r in stage.db.execute(f'SELECT digest FROM {table} WHERE account=?',(account,))}
@@ -145,9 +158,11 @@ class Workflow:
                             if message.startswith(('対象外：','解析済み：徴収・還付額0円')):
                                 summary.excluded_pdf_files+=1
                                 proposal.append({'account':account,'name':path.name,'kind':'対象外','new':0,'existing':0,'state':message})
-                                if '未解析' in message or any(word in message for word in ('外国株式','外国債券')):
+                                if getattr(e,'needs_review',False) or '未解析' in message or any(word in message for word in ('外国株式','外国債券')):
                                     warning=f'PDF_NOT_PARSED:{account}:{path.name}'
                                     if warning not in self.state['warnings']:self.state['warnings'].append(warning)
+                                if getattr(e,'code',None)=='NISA_TRANSFER_OUT':
+                                    self.state['warnings'].append(f'NISA_TRANSFER_UNAPPLIED:{account}:{path.name}')
                                 continue
                             raise UpdateError('UNSUPPORTED_PDF',f'口座{account}：{path.name}\n{message}\n未確認の書類を黙って除外せず、今回の一括登録を停止しました。') from None
                         if doc.digest!=digest:raise UpdateError('SOURCE_CHANGED','検査中にPDFが変更されました。もう一度実行してください。')
@@ -156,10 +171,16 @@ class Workflow:
                         proposal.append({'account':account,'name':path.name,'kind':kind,'new':added,'existing':existing,'state':'名義・整合性確認済み'})
                 after=(len(stage.records()),len(activities.events()),len(activities.balances()))
                 summary.new_trades=after[0]-before[0];summary.new_cash_or_splits=after[1]-before[1];summary.balance_reports=after[2]-before[2]
-                from asset_snapshots import historical_status
+                from asset_snapshots import historical_status,snapshots
+                dated=snapshots(stage)
                 for account in (a for a in selected if a!='E'):
                     history=historical_status(stage,account,self.target_dates)
                     for target,status in history.items():
+                        row=dated.get((account,target),{})
+                        if row.get('source')=='SBI My資産の前月比':
+                            self.state['warnings'].append(f'ASSET_DATE_LEGACY_ESTIMATE:{account}:{target}')
+                        if row.get('evidence',{}).get('method')=='observed-at':
+                            self.state['warnings'].append(f'ASSET_DATE_OBSERVED:{account}:{target}')
                         if not status['complete']:
                             self.state['warnings'].append(f'ASSET_DATE_INCOMPLETE:{account}:{target}')
                 self.emit('PREPARING_EXCEL',summary=asdict(summary));self.check_cancel()

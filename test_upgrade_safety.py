@@ -126,12 +126,14 @@ class AutomaticAcquisition(unittest.TestCase):
         page.url = 'https://m.sbisec.co.jp/account'
         page.is_closed.return_value = False
         page.frames = [page]
-        page.locator.return_value.inner_text.return_value = 'Custom C 様 ログアウト'
+        page.locator.return_value.inner_text.return_value = 'Custom C 様 ログアウト 口座管理'
+        page.locator.return_value.count.return_value = 0
         playwright = Mock()
         browser = playwright.chromium.launch.return_value
         context = browser.new_context.return_value
         context.new_page.return_value = page
         context.pages = [page]
+        page.context = context
         store = Mock()
         store.accounts.return_value = [{'id':'C', 'owner_name':'Custom C'}]
         mocks = {

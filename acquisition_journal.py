@@ -144,14 +144,13 @@ def persist_capture(base,account,owner,store,since,target_dates=()):
     """
     _settings(store,account,owner);start=_stamp(since)
     tables={r[0] for r in store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    newest={};snapshots=[]
+    observations=[];snapshots=[]
     if 'account_observations' in tables:
         for row in store.db.execute('SELECT kind,observed_at,payload FROM account_observations WHERE account=?',(account,)):
             if _stamp(row['observed_at'])<start:continue
             try:item=_observation({'kind':row['kind'],'observed_at':row['observed_at'],'payload':json.loads(row['payload'])})
             except (ValueError,TypeError):raise _error() from None
-            key=item['kind'];previous=newest.get(key)
-            if previous is None or _stamp(item['observed_at'])>_stamp(previous['observed_at']):newest[key]=item
+            observations.append(item)
     if 'asset_snapshots' in tables:
         for row in store.db.execute('SELECT as_of,payload FROM asset_snapshots WHERE account=?',(account,)):
             try:payload=json.loads(row['payload'])
@@ -160,7 +159,7 @@ def persist_capture(base,account,owner,store,since,target_dates=()):
             if not str(payload.get('source','')).startswith('SBI'):continue
             if _stamp(payload.get('recorded_at'))<start:continue
             snapshots.append(_snapshot({'as_of':row['as_of'],'payload':payload}))
-    observations=sorted(newest.values(),key=lambda v:(v['kind'],v['observed_at']))
+    observations.sort(key=lambda v:(v['kind'],v['observed_at']))
     if not observations and not snapshots:return None
     times=[start,datetime.now(timezone.utc)]
     times.extend(_stamp(v['observed_at']) for v in observations)
@@ -204,7 +203,8 @@ def _read(path,account,owner):
     snapshots=[_snapshot(item,True) for item in data['snapshots']]
     for stamp in [_stamp(v['observed_at']) for v in observations]+[_stamp(v['payload']['recorded_at']) for v in snapshots]:
         if not start<=stamp<=end:raise _error()
-    return {'account':account,'observations':observations,'snapshots':snapshots}
+    return {'account':account,'observations':observations,'snapshots':snapshots,
+            'capture_window':{'account':account,'since':_iso(data['since']),'acquired_at':_iso(data['acquired_at'])}}
 
 
 def _merge_snapshot(old,new,as_of):
@@ -238,7 +238,7 @@ def replay_captures(base,stage,accounts=None):
     selected=tuple('ABCD') if accounts is None else tuple(accounts)
     if len(set(selected))!=len(selected) or any(a not in tuple('ABCDE') for a in selected):raise _error()
     root=Path(base)/'data'/'acquisitions';journals=[]
-    result={'accounts':[],'observations':0,'snapshots':0,'warnings':[],'proposal':[]}
+    result={'accounts':[],'observations':0,'snapshots':0,'warnings':[],'proposal':[],'windows':[]}
     if not root.exists():return result
     if root.is_symlink():raise _error('取得証跡の保存先にリンクがあります。')
     for account in selected:
@@ -250,6 +250,7 @@ def replay_captures(base,stage,accounts=None):
             journals.append(_read(path,account,owner))
     if not journals:return result
     result['accounts']=sorted({v['account'] for v in journals})
+    result['windows']=[v['capture_window'] for v in journals]
     savepoint='acquisition_replay_'+uuid.uuid4().hex
     stage.db.execute('SAVEPOINT '+savepoint)
     try:

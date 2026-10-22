@@ -21,34 +21,48 @@ def norm(value):return re.sub(r'\s+','',unicodedata.normalize('NFKC',str(value))
 def frames(page):return list(page.frames) if hasattr(page,'frames') else [page]
 def navigate(page,names,timeout=15,cancelled=lambda:False):
     from auto_login import trusted
-    from sbi_navigation import controls
-    end=time.monotonic()+timeout
-    count=0
+    from urllib.parse import urlparse
+    from sbi_navigation import scan,select_rows,control,_destination
+    end=time.monotonic()+timeout;count=0
     while True:
         _check_cancelled(cancelled)
         pages=list(page.context.pages) if hasattr(page,'context') else [page]
-        # Prefer the most recently opened SBI tab; e-post has a separate domain.
-        for p in reversed(pages):
-            if p.is_closed():continue
+        for tab in reversed(pages):
+            if tab.is_closed():continue
             choices=[]
-            for f in frames(p):
-                if not trusted(f):continue
-                try:choices.extend(controls(f,names))
+            for frame in frames(tab):
+                if not trusted(frame):continue
+                try:
+                    for row in select_rows(scan(frame),names):
+                        destination=_destination(frame,row)
+                        if destination:
+                            url=urlparse(destination);host=(url.hostname or '').lower()
+                            if url.scheme!='https' or not (host=='sbisec.co.jp' or host.endswith('.sbisec.co.jp')):continue
+                        choices.append((frame,row,destination))
                 except Exception:continue
             count=len(choices)
-            if len(choices)>1:
-                hrefs=[x.get_attribute('href') for x in choices]
-                if hrefs[0] and not hrefs[0].lower().startswith('javascript:') and len(set(hrefs))==1:choices=choices[:1]
+            explicit={destination for _,_,destination in choices if destination}
+            if len(explicit)==1:
+                # Header, footer and relative/absolute links to the same actual
+                # SBI destination are equivalent. Prefer that observed route to
+                # ambiguous JavaScript menu controls bearing the same caption.
+                choices=[next(choice for choice in choices if choice[2])]
+            elif len(choices)>1:
+                choices=[]
             if len(choices)==1:
-                before={id(tab) for tab in pages}
-                choices[0].click(timeout=10000);p.wait_for_timeout(200)
-                # My資産 can open a separate SBI tab. Keep the verified context
-                # and read the new trusted page instead of the old menu.
-                current=list(p.context.pages) if hasattr(p,'context') else [p]
-                opened=[tab for tab in current if id(tab) not in before and not tab.is_closed() and trusted(tab)]
-                return opened[-1] if opened else p
+                frame,row,_=choices[0];before={id(item) for item in pages}
+                control(frame,row).click(timeout=10000,no_wait_after=True)
+                tab.wait_for_timeout(200)
+                opened=[item for item in list(tab.context.pages) if id(item) not in before and not item.is_closed() and trusted(item)]
+                return opened[-1] if opened else tab
         if time.monotonic()>=end:raise CredentialError('画面移動：'+names[0]+f' の表示候補={count}。')
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(250)
+
+
+def select_asset_page(page,owner=None,identity_verified=False,entry_url=None,progress=lambda _:None,cancelled=lambda:False):
+    from sbi_asset_runtime import select_asset_page as select
+    return select(page,owner=owner,identity_verified=identity_verified,entry_url=entry_url,progress=progress,cancelled=cancelled)
+
 
 def landing(context,timeout=40,cancelled=lambda:False):
     from auto_login import trusted
@@ -269,6 +283,11 @@ def _check_asset_identity(page,owner,require_match=False):
     from auto_login import trusted
     if not trusted(page):raise CredentialError('SBI資産画面の移動先を確認できません。')
     if owner:
+        for frame in frames(page):
+            if not trusted(frame):continue
+            passwords=frame.locator('input[type="password"]')
+            if any(passwords.nth(index).is_visible() for index in range(passwords.count())):
+                raise CredentialError('資産取得中にログイン画面へ戻りました。保存せず停止しました。')
         from post_identity import state
         text,_=snapshot_dom(page)
         result=state(text,owner)
@@ -276,15 +295,10 @@ def _check_asset_identity(page,owner,require_match=False):
         if require_match and result!='MATCH':raise CredentialError('資産取得前の口座名義を確認できません。保存せず停止しました。')
 
 def include_cash(page):
-    """A local view filter, never an order or account-setting operation."""
-    from auto_login import trusted
-    for frame in frames(page):
-        if not trusted(frame):continue
-        controls=frame.get_by_role('checkbox',name='預り金を除外',exact=True)
-        visible=[controls.nth(i) for i in range(controls.count()) if controls.nth(i).is_visible()]
-        if len(visible)>1:raise CredentialError('預り金の表示切替を一意に確認できません。')
-        if visible and visible[0].is_checked():
-            visible[0].uncheck(timeout=5000);page.wait_for_timeout(500)
+    """Apply the rendered cash filter and its local refresh control, if any."""
+    from sbi_asset_runtime import apply_cash_filter
+    return apply_cash_filter(page)
+
 
 def reveal_asset_rows(page):
     """Use rendered display controls to reveal zero balances, never infer zero."""
@@ -295,12 +309,12 @@ def reveal_asset_rows(page):
         for name in ('残高ゼロの項目を表示','残高0の項目を表示','残高のない商品を表示','残高ゼロを表示','残高0を表示'):
             loc=frame.get_by_role('checkbox',name=name,exact=True)
             matches=[loc.nth(index) for index in range(loc.count()) if loc.nth(index).is_visible()]
-            if len(matches)>1:raise CredentialError('残高表示の切替を一意に確認できません。')
+            if len(matches)>1:raise LedgerError('残高表示の切替を一意に確認できません。')
             if matches and not matches[0].is_checked():matches[0].check(timeout=5000);changed=True
         for name in ('資産の内訳を表示','内訳をすべて表示','資産をすべて表示'):
             loc=frame.get_by_role('button',name=name,exact=True)
             matches=[loc.nth(index) for index in range(loc.count()) if loc.nth(index).is_visible() and loc.nth(index).get_attribute('aria-expanded')=='false']
-            if len(matches)>1:raise CredentialError('資産内訳の展開を一意に確認できません。')
+            if len(matches)>1:raise LedgerError('資産内訳の展開を一意に確認できません。')
             if matches:matches[0].click(timeout=5000);changed=True
     if changed:page.wait_for_timeout(400)
 
@@ -308,6 +322,7 @@ def reveal_asset_rows(page):
 def capture_account(page,store,account,progress=lambda _:None,owner=None,cancelled=lambda:False,identity_verified=False,diagnostics=None,target_dates=()):
     if account not in ('A','B','C','D'):raise LedgerError('自動資産取得はA～Dです。')
     _check_cancelled(cancelled)
+    page=select_asset_page(page,owner=owner,identity_verified=identity_verified,progress=progress,cancelled=cancelled)
     _check_asset_identity(page,owner,require_match=bool(owner) and not identity_verified)
     captured={};asset_text='';asset_tables=[]
     stages=[('口座サマリー',['口座(円建)']),('My資産',['My資産','My資産トップ']),
@@ -326,25 +341,13 @@ def capture_account(page,store,account,progress=lambda _:None,owner=None,cancell
                     pass
             else:
                 try:page=navigate(page,names,timeout=5,cancelled=cancelled)
-                except CredentialError:
+                except CredentialError as error:
                     _check_cancelled(cancelled)
-                    from auto_login import trusted
-                    if not trusted(page):raise
-                    page.goto('https://site.sbisec.co.jp/account/assets',wait_until='domcontentloaded')
+                    raise LedgerError('My資産への表示リンクを一意に確認できません。') from error
                 include_cash(page)
                 reveal_asset_rows(page)
-            parser=parse_summary if kind=='口座サマリー' else parse_my_assets if kind=='My資産' else parse_currency_summary
-            for attempt in range(12):
-                _check_cancelled(cancelled);_check_asset_identity(page,owner)
-                text,tables=snapshot_dom(page)
-                try:
-                    values=parser(text,tables)
-                    if kind=='口座サマリー' and not any(k in values for k in ('cash_total','growth_remaining','tsumitate_remaining')):
-                        raise LedgerError('口座サマリーの本体を確認できません。')
-                    break
-                except LedgerError:
-                    if attempt==11:raise
-                    page.wait_for_timeout(500)
+            from sbi_asset_runtime import read_current_view
+            text,tables,values=read_current_view(page,kind,owner=owner,cancelled=cancelled)
             _check_cancelled(cancelled)
             save_observation(store,account,kind,text,values)
             captured[kind]=values
@@ -352,8 +355,8 @@ def capture_account(page,store,account,progress=lambda _:None,owner=None,cancell
             if kind=='My資産':
                 asset_text,asset_tables=text,tables
                 # Target-date collection uses only displayed-date history.
-                # Monthly deltas are 1st 07:00 baselines and cannot establish
-                # the previous calendar month-end or the beginning of day 1.
+                # A monthly comparison does not establish either calendar
+                # boundary or its valuation time. Its derivation is retired.
                 if not target_dates:
                     from asset_snapshots import capture_history,capture_page,capture_month_start
                     try:
@@ -376,7 +379,8 @@ def capture_account(page,store,account,progress=lambda _:None,owner=None,cancell
             # followed by another page read or a saved snapshot.
             raise
         except Exception as error:
-            progress(f'口座{account}：{kind}は未取得：{type(error).__name__}。')
+            reason=str(error) if isinstance(error,LedgerError) else type(error).__name__
+            progress(f'口座{account}：{kind}は未取得：{reason}。')
             from pathlib import Path
             target=Path(diagnostics) if diagnostics is not None else Path(store.directory)/'diagnostics';target.mkdir(parents=True,exist_ok=True)
             stamp=_jst_now().strftime('%Y%m%d_%H%M%S')

@@ -213,9 +213,12 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             submit_otp(page,otp,progress=lambda msg:progress(f'口座{account}：{msg}'),cancelled=cancelled)
             (page.page if hasattr(page,'page') else page).wait_for_timeout(2000)
         stage='ログイン完了・名義確認';progress(f'口座{account}：{stage}')
-        from sbi_views import landing,verify_post_owner,capture_account
+        from sbi_views import landing,verify_post_owner,capture_account,select_asset_page
         page=landing(context,cancelled=cancelled)
         if not documents:page=authenticated_page(context,owner,cancelled=cancelled)
+        # A post navigation may replace this very Page. Keep its observed SBI
+        # entry only in memory so we can return within the same login context.
+        asset_entry_url=page.url if trusted(page) else None
         if cancelled():raise CredentialError('中止しました。')
         saved=duplicate=failed=0
         pdf_error=None
@@ -255,6 +258,7 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
         capture_started=_jst_now().isoformat()
         journal_saved=False
         try:
+            page=select_asset_page(page,owner=owner,identity_verified=True,entry_url=asset_entry_url,progress=progress,cancelled=cancelled)
             assets_observed=capture_account(page,store,account,progress,owner=owner,cancelled=cancelled,identity_verified=True,diagnostics=BASE/'data'/'diagnostics',target_dates=target_dates)
             from sbi_views import capture_status
             status=capture_status(store,account,since=capture_started)

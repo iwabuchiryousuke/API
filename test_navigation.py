@@ -69,9 +69,11 @@ class WorkflowRecovery(unittest.TestCase):
  def test_pdf_saved_before_asset_failure_and_owner_checked(self):
   from contextlib import ExitStack
   from auto_login import run_one
-  events=[];p=page();p.locator.return_value.inner_text.return_value='岩渕亮介 ログアウト'
+  events=[];p=page();p.locator.return_value.inner_text.return_value='岩渕亮介 様 ログアウト 口座管理'
+  p.locator.return_value.count.return_value=0;p.locator.return_value.evaluate_all.return_value=[]
   pw=Mock();browser=pw.chromium.launch.return_value;ctx=browser.new_context.return_value
   ctx.new_page.return_value=p;ctx.pages=[p]
+  p.context=ctx
   st=Mock();st.accounts.return_value=[{'id':'C','owner_name':'岩渕亮介'}]
   with ExitStack() as stack:
    patches={

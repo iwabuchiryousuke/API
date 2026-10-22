@@ -120,7 +120,9 @@ def build(store,activities,month='',management=False):
             t.formula(r,17,f'IF(COUNT(M{r}:P{r})=4,SUM(M{r}:P{r}),"")')
             t.put(r,18,None if a['id']=='E' or not s else s.get('growth_remaining'),'number')
             t.put(r,19,None if a['id']=='E' or not s else s.get('tsumitate_remaining'),'number')
-            t.put(r,20,'父は手動' if a['id']=='E' else (s.get('note','') if s else '未取得'))
+            note=s.get('note','') if s else '未取得'
+            if s and s.get('source')=='SBI My資産の前月比':note='旧版の前月比推定（基準時刻・指定日残高は未確認）。'+note
+            t.put(r,20,'父は手動' if a['id']=='E' else note)
     t.merges=[f'L{r}:R{r}' for r in (21,23,24,25,26)]
     t.row(21,['日付は実際の評価基準日。外貨はSBI表示の円評価を保存。買付余力は合計しない。'],12)
     # Public research data, date-specific and never silently reused next year.

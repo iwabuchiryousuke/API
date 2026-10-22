@@ -83,6 +83,10 @@ class AssetBrowserTests(unittest.TestCase):
             <tr><th>商品</th><th>評価額(円)</th><th>評価損益</th></tr>
             <tr><td>国内株式(現物)</td><td>5,000</td><td>+2,000</td></tr>
             <tr><td>外国株式(米国)</td><td>2,000</td><td>+500</td></tr>
+            <tr><td>投資信託</td><td>0</td><td>0</td></tr>
+            <tr><td>円貨建債券</td><td>0</td><td>0</td></tr>
+            <tr><td>外貨建MMF(米ドル建て)</td><td>0</td><td>0</td></tr>
+            <tr><td>外貨建債券(米ドル建て)</td><td>0</td><td>0</td></tr>
             <tr><td>預り金(米ドル)</td><td>1,500</td><td>--</td></tr></table>''',
             '/foreign': '''<table><tr><th>通貨</th><th>買付余力</th><th>預り金</th><th>円換算額</th></tr>
             <tr><td>米ドル</td><td>999</td><td>10.25</td><td>1,500</td></tr></table>'''

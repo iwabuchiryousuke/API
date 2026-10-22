@@ -98,9 +98,11 @@ class InterruptedAcquisition(unittest.TestCase):
             base=Path(folder);live=Store(base/'data');Activities(live);live.set_owner('C','Owner C');live.close()
             stage=Store(staged);stage.set_owner('C','Owner C')
             page=Mock();page.url='https://m.sbisec.co.jp/account';page.is_closed.return_value=False;page.frames=[page]
-            page.locator.return_value.inner_text.return_value='Owner C 様 ログアウト'
+            page.locator.return_value.inner_text.return_value='Owner C 様 ログアウト 口座管理'
+            page.locator.return_value.count.return_value=0
             pw=Mock();browser=pw.chromium.launch.return_value;context=browser.new_context.return_value
             context.new_page.return_value=page;context.pages=[page]
+            page.context=context
             events=[]
             def capture(p,store,account,progress,**kwargs):
                 events.append('assets')

@@ -39,14 +39,16 @@ class AcquisitionTests(unittest.TestCase):
   out=json.loads(subprocess.check_output(['node','-e',script],text=True));self.assertEqual(len(out),1);self.assertEqual(out[0]['index'],1)
 
 class AssetTests(unittest.TestCase):
- def test_timestamp_and_month_baseline(self):
+ def test_monthly_difference_never_creates_a_first_day_snapshot(self):
   with tempfile.TemporaryDirectory() as d:
    st=Store(d)
    try:
     rows=[['商品','評価額','前月比(率)'],['国内株式','1,100円','+100円\n+10%'],['預り金(円)','300円','0円'],['スィープ専用銀行口座','400円','+50円']]
-    self.assertEqual(capture_month_start(st,'A','2026/10/21 19:00',[rows]),1)
-    self.assertEqual(snapshots(st)['A','2026-10-01']['cash'],650)
-    self.assertNotIn(('A','2026-09-30'),snapshots(st))
+    save(st,'A','2026-09-30',{'cash':650},note='以前の確認記録')
+    before=snapshots(st)
+    self.assertEqual(capture_month_start(st,'A','2026/10/21 19:00',[rows]),0)
+    self.assertEqual(snapshots(st),before)
+    self.assertNotIn(('A','2026-10-01'),snapshots(st))
    finally:st.close()
  def test_requested_columns_and_exact_nisa_dates(self):
   with tempfile.TemporaryDirectory() as d:

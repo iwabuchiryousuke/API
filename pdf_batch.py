@@ -2,12 +2,84 @@
 import hashlib
 import sqlite3
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from ledger import LedgerError,Store
 from activity import Activities
 from corporate_actions import parse_notice,parse_balance
 from pdf_import import parse_report
 from pdf_common import load_pdf
+
+
+@dataclass(frozen=True)
+class DocumentExclusionRule:
+    code:str
+    title:str
+    required_title_parts:tuple[str,...]
+    reason:str
+    needs_review:bool=True
+    identifiers:tuple[str,...]=()
+    display_title:str=''
+
+
+# This finite list describes identified document types, not an instruction to
+# ignore arbitrary notices. New financial event parsers require verified PDFs.
+# More specific titles precede generic annual-report references in disclosures.
+KNOWN_DOCUMENT_EXCLUSIONS=(
+    DocumentExclusionRule(
+        'FOREIGN_STOCK_CORPORATE_ACTION',
+        '外国株式等株式分割・権利売却等のご案内',
+        ('外国株式等株式分割・権利売却等のご案内',),
+        '国内株式の株数・売却代金には反映しません。PDF原本を保持し、内容・通貨を確認してください。'),
+    DocumentExclusionRule(
+        'NISA_TRANSFER_OUT',
+        '非課税口座内上場株式等払出通知書',
+        ('非課税口座内上場株式等払出通知書',),
+        '売買約定の明細ではありません。NISAからの払出し・口座区分の移動は未反映です。'
+        '売却取引・税額・取得単価を推定せず、PDF原本を保持します。原本と既存の預り区分・取得価額を確認してください。'),
+    DocumentExclusionRule(
+        'FOREIGN_BOND_INCOME',
+        '外国債券利金・償還金お支払のご案内',
+        ('外国債券利金','償還金お支払のご案内'),
+        '円額と利金部分を原本で確認し、利息は手動登録してください。PDF原本を保持します。',
+        display_title='外国債券の利金・償還金'),
+    DocumentExclusionRule(
+        'ANNUAL_TAX_REPORT',
+        '特定口座年間取引報告書',
+        ('特定口座年間取引報告書',),
+        '売買明細ではないため、取引として重ねて登録しません。PDF原本を保持します。',
+        needs_review=False,identifiers=('STWHGB',)),
+    DocumentExclusionRule(
+        'FOREIGN_STOCK_TRADE',
+        '外国株式等取引報告書',
+        ('外国株式等取引報告書',),
+        '外国株式の売買・通貨別金額は取引台帳へ未反映です。推定で円建て取引を作らず、PDF原本を保持します。'),
+    DocumentExclusionRule(
+        'FOREIGN_BOND_TRADE',
+        '外国債券取引報告書',
+        ('外国債券取引報告書',),
+        '外国債券の売買・通貨別金額は取引台帳へ未反映です。推定で円建て取引を作らず、PDF原本を保持します。'),
+)
+
+
+class KnownDocumentExclusion(LedgerError):
+    """An identified but unimported document, with a reviewable reason."""
+    def __init__(self,rule):
+        self.code=rule.code
+        self.document_title=rule.title
+        self.reason=rule.reason
+        self.needs_review=rule.needs_review
+        title=rule.display_title or rule.title
+        status='（未解析）' if rule.needs_review else '（売買明細ではありません）'
+        super().__init__('対象外：'+title+status+'。'+rule.reason)
+
+
+def _known_exclusion(first):
+    for rule in KNOWN_DOCUMENT_EXCLUSIONS:
+        if all(part in first for part in rule.required_title_parts) or any(marker in first for marker in rule.identifiers):
+            return KnownDocumentExclusion(rule)
+    return None
+
 
 def classify(path):
     data=load_pdf(path,max_pages=50)
@@ -21,22 +93,10 @@ def classify(path):
     # over those incidental words; none of them changes the document's type.
     if any(marker in first for marker in ('STWHZB','FR00011M01')):
         return 'balance',parse_balance(path)
-    # This is a known document type, but its foreign-currency corporate action
-    # is not parsed. Recognize the PDF's own title, never the downloaded file
-    # name: an unreadable or unrelated PDF must still stop the update.
-    if '外国株式等株式分割・権利売却等のご案内' in first:
-        raise LedgerError('対象外：外国株式等株式分割・権利売却等のご案内（未解析）。'
-                          '国内株式の株数・売却代金には反映しません。PDF原本を保持し、内容・通貨を確認してください。')
-    if '外国債券利金' in first and '償還金お支払のご案内' in first:
-        raise LedgerError('対象外：外国債券の利金・償還金。円額と利金部分を原本で確認し、利息は手動登録してください。')
-    # Exclude these before looking for the generic words "取引報告書".  This
-    # prevents a foreign/annual report from ever reaching the domestic parser.
-    if '特定口座年間取引報告書' in text or 'STWHGB' in text:
-        raise LedgerError('対象外：特定口座年間取引報告書（売買明細ではありません）。')
-    if '外国株式等取引報告書' in text:
-        raise LedgerError('対象外：外国株式等取引報告書。')
-    if '外国債券取引報告書' in text:
-        raise LedgerError('対象外：外国債券取引報告書。')
+    # Recognize first-page content/identifiers, never downloaded file names.
+    # Incidental references on later pages cannot exclude a supported report.
+    exclusion=_known_exclusion(first)
+    if exclusion is not None:raise exclusion
     if ('株式等配当金のお知らせ' in text or
             '株式等利益剰余金配当金のお知らせ' in text or
             '割当株式等のお知らせ' in text or

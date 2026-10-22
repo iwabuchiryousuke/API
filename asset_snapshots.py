@@ -99,14 +99,22 @@ def cell_money(value,allow_bare=False):
     return values[0] if len(values)==1 else None
 
 def combine_assets(observed):
-    def add(base,extras):
-        if observed.get(base) is None or any(k in observed and observed[k] is None for k in extras):return None
-        return observed[base]+sum(observed.get(k,0) for k in extras)
-    result=dict(domestic=add('domestic',('fund','bond')),foreign=add('foreign',('usd_fund','usd_bond')),foreign_cash=observed.get('foreign_cash'))
-    # Bank is never silently treated as zero. Two independently labelled balances
-    # are required to report combined cash.
-    result['cash']=observed['cash']+observed['bank'] if observed.get('cash') is not None and observed.get('bank') is not None else None
-    return result
+    """Aggregate only explicitly observed component values, including zero.
+
+    A domestic-stock row does not establish that funds or bonds are absent.
+    Foreign stock, USD MMF and USD bonds follow the same rule. Missing and
+    unknown components keep the aggregate unknown; raw rows remain available
+    in the underlying account observation.
+    """
+    def total(keys):
+        if any(observed.get(key) is None for key in keys):return None
+        return sum(observed[key] for key in keys)
+    return {
+        'domestic':total(('domestic','fund','bond')),
+        'foreign':total(('foreign','usd_fund','usd_bond')),
+        'cash':total(('cash','bank')),
+        'foreign_cash':observed.get('foreign_cash'),
+    }
 
 def extract_observations(text,tables=()):
     found={}
@@ -186,36 +194,15 @@ def capture_browser(store,account,page):
     return count
 
 def capture_month_start(store,account,text,tables):
-    """SBI defines monthly difference against day 1 at 07:00.
-    Only explicitly labelled yen differences can reconstruct that baseline.
+    """Retired automatic derivation; retained as a no-write compatibility hook.
+
+    Today's valuation timestamp and a monthly difference do not identify a
+    calendar month boundary or establish the historical comparison semantics.
+    Exact dated rows/panels are collected through the explicit history path.
+    Existing derived records are preserved and never newly inferred here.
     """
-    body=unicodedata.normalize('NFKC',text)
-    dates=re.findall(r'(?:評価基準日|基準日時|資産評価日|更新日時)[ :：\n]*(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})',body)
-    if not dates:dates=re.findall(r'(\d{4})/(\d{1,2})/(\d{1,2})\s+\d{1,2}:\d{2}',body)
-    if len(set(dates))!=1:return 0
-    observed={}
-    for rows in tables:
-        value_index=delta_index=None;bare=False
-        for row in rows:
-            hs=[normalized(x) for x in row]
-            vi=[i for i,h in enumerate(hs) if h in ('評価額(円)','資産残高(円)','評価額')]
-            di=[i for i,h in enumerate(hs) if h in ('前月比(円)','前月比','前月比(率)','前月比/率(%)','前月比率(%)')]
-            if len(vi)==len(di)==1:value_index,delta_index=vi[0],di[0];bare=hs[value_index]!='評価額';continue
-            if value_index is None or len(row)<=max(value_index,delta_index):continue
-            keys=[category(x) for i,x in enumerate(row) if i not in (value_index,delta_index) and category(x)]
-            if len(keys)!=1:continue
-            now=money(row[value_index].splitlines()[0],bare);raw=normalized(row[delta_index].splitlines()[0]).replace('−','-').replace('△','-')
-            match=re.fullmatch(r'([+-]?[0-9][0-9,]*(?:\.[0-9]+)?)(?:円)?',raw)
-            if now is None or not match:continue
-            baseline=now-float(Decimal(match[1].replace(',','')))
-            if baseline<0:continue
-            if keys[0] in observed and observed[keys[0]]!=baseline:raise LedgerError('前月比から計算した基準額が一致しません。')
-            observed[keys[0]]=baseline
-    values=combine_assets(observed)
-    if not any(v is not None for v in values.values()):return 0
-    y,m,_=map(int,dates[0]);dt=f'{y:04}-{m:02}-01'
-    save(store,account,dt,values,'SBI My資産の前月比','当月1日07:00基準＝評価額−前月比。未確認項目は空欄。')
-    return 1
+    return 0
+
 
 # Exact-date history is deliberately separate from the monthly-difference
 # baseline. A first-day 07:00 derivation does not establish a calendar boundary.

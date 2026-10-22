@@ -91,6 +91,7 @@ def fake_page():
     page.is_closed.return_value = False
     page.frames = [page]
     page.get_by_role.return_value.count.return_value = 0
+    page.locator.return_value.count.return_value = 0
     return page
 
 
@@ -119,6 +120,7 @@ class AssetParsing(unittest.TestCase):
     def test_captured_div_rows_ignore_menu_and_gain(self):
         value = parse_my_assets(ASSETS, [])
         self.assertEqual(value, {'domestic': 5000, 'bank': 3000})
+        self.assertIsNone(combine_assets(value)['domestic'])
         self.assertIsNone(combine_assets(value)['foreign'])
         self.assertIsNone(combine_assets(value)['cash'])
 
@@ -171,6 +173,13 @@ class AssetAcquisition(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.store = Store(self.tmp.name)
         self.page = fake_page()
+        self.enterContext(patch('sbi_views.select_asset_page', side_effect=lambda page, **_: page))
+        def immediate(page, kind, **kwargs):
+            from sbi_views import snapshot_dom,parse_summary,parse_my_assets,parse_currency_summary
+            text,tables=snapshot_dom(page)
+            parser={'口座サマリー':parse_summary,'My資産':parse_my_assets,'口座(外貨建)':parse_currency_summary}[kind]
+            return text,tables,parser(text,tables)
+        self.enterContext(patch('sbi_asset_runtime.read_current_view',side_effect=immediate))
 
     def tearDown(self):
         self.store.close()

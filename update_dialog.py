@@ -14,12 +14,27 @@ def warning_lines(warnings):
     if excluded:lines.append(f'未解析PDF {len(excluded)}件：原本は保持し、取引には反映しません。書類名と理由を下の一覧で確認してください。')
     for warning in dict.fromkeys(warnings):
         if warning=='SAVED_FILES_ONLY':lines.append('保存済みPDF・取得証跡から更新します。今回はSBIへ接続していません。')
+        elif warning.startswith('NISA_TRANSFER_UNAPPLIED:'):
+            _,account,_=warning.split(':',2)
+            lines.append('口座'+account+'：NISA払出通知の口座区分移動・取得価額は未反映です。原本と既存記録を確認してください。')
         elif warning.startswith('ASSET_FIELDS_MISSING:'):
             _,account,keys=warning.split(':',2)
             lines.append('口座'+account+'の現在資産で未取得：'+'、'.join(labels.get(k,k) for k in keys.split(',')))
         elif warning.startswith('ASSET_DATE_INCOMPLETE:'):
             _,account,day=warning.split(':',2)
-            lines.append('口座'+account+'・'+day+'：指定日の資産/NISAに未確認項目があります。現在値や推計値で代用しません。')
+            if f'ASSET_DATE_OBSERVED:{account}:{day}' in warnings:continue
+            lines.append('口座'+account+'・'+day+'：基準日を直接確認できない資産/NISAがあります。別日の現在値や推計で補完しません。')
+        elif warning.startswith('ASSET_DATE_OBSERVED:'):
+            _,account,day=warning.split(':',2)
+            lines.append('口座'+account+'・'+day+'：当日実測の参考記録です。月末終値・月初開始時点ではなく、空欄は未取得です。Excelの確認状態に取得時刻を記載します。')
+        elif warning.startswith('ASSET_DATE_LEGACY_ESTIMATE:'):
+            _,account,day=warning.split(':',2)
+            lines.append('口座'+account+'・'+day+'：旧版の前月比推定値を保持しています。基準時刻・暦日の残高としては未確認です。')
+        elif warning.startswith(('DAILY_OBSERVATION:','DAILY_OBSERVATION_CONFLICT:')):
+            parts=warning.split(':')
+            if warning.endswith(':NO_SAME_DAY_OBSERVATION') and f'ASSET_DATE_INCOMPLETE:{parts[1]}:{parts[2]}' in warnings:continue
+            line='口座'+parts[1]+'・'+parts[2]+'：当日の履歴に不足・時刻不一致・競合があり、確認できる項目だけを採用します。'
+            if line not in lines:lines.append(line)
         elif warning.startswith('ASSETS_NOT_OBSERVED_'):lines.append('口座'+warning[-1]+'：今回、現在資産の全項目を確認できていません。')
         elif warning.startswith('MANUAL_ASSET_PRESERVED:'):lines.append('手動で登録済みの資産額を保持しました。取得証跡の一覧で確認してください。')
         elif not warning.startswith('PDF_NOT_PARSED:'):lines.append(str(warning))
@@ -120,6 +135,7 @@ def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=Fa
                 status.set('登録前の最終確認：以下を確認して「登録してExcel出力」を押してください。')
                 details.insert('end',f"追加売買 {summary['new_trades']}件／配当・分割等 {summary['new_cash_or_splits']}件／残高報告 {summary['balance_reports']}件\n登録済PDF {summary['known_pdf_files']}件／対象外 {summary['excluded_pdf_files']}件\n\n")
                 details.insert('end',f"現在資産の全項目を確認：{summary['assets_observed']}口座／保存済み取得証跡：{summary.get('recovered_asset_accounts',0)}口座\n")
+                if summary.get('daily_asset_records'):details.insert('end',f"月末・月初の当日実測（参考記録）：{summary['daily_asset_records']}件。終値・開始時点との区別を確認してください。\n")
                 warnings=summary.get('warnings',[])
                 if warnings:
                     lines=warning_lines(warnings)
