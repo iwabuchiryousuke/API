@@ -1,0 +1,17 @@
+{
+  "tests": 277,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "expected_failures": 0,
+  "unexpected_successes": 0,
+  "seconds": 29.87,
+  "successful": true,
+  "packaged_tests": {
+    "tests": 277,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "code_zip_sha256": "690499775cad7e6511140b17aecc2e6a89faaa462ab12c7278e107c9a856085e"
+}

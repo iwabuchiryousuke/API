@@ -1,0 +1,189 @@
+{
+  "year": 2026,
+  "verified_at": "2026-10-16",
+  "note": "DPSは2026年権利分。支払年と事業年度を混同しない。権利最終日は基準日からT+2と営業日で算出。",
+  "securities": {
+    "1540": {
+      "rights": "対象外（無分配方針）",
+      "payments": "対象外（無分配方針）",
+      "earnings": "ETF",
+      "dps": 0,
+      "status": "金ETF・原則無分配。将来の方針変更は要確認。",
+      "source": "https://kikinzoku.tr.mufg.jp/ja/lineup/gold.html ; 確認日2026-10-16 ; 前月終値出典 https://jp.investing.com/etfs/mitsubishi-japan-physical-gold-historical-data ; 前月終値再確認2026-10-17 https://finance.yahoo.co.jp/quote/1540.T/history",
+      "close": 19680,
+      "close_date": "2026-09-30",
+      "price_source": "https://finance.yahoo.co.jp/quote/1540.T/history",
+      "name": "純金上場信託（現物国内保管型）",
+      "calendar_complete": true,
+      "events": [],
+      "price_checked_at": "2026-10-17"
+    },
+    "314A": {
+      "rights": "対象外（通常無分配）",
+      "payments": "対象外（通常無分配）",
+      "earnings": "ETF",
+      "dps": 0,
+      "status": "金ETF・通常分配なし。将来の方針変更は要確認。",
+      "source": "https://www.blackrock.com/jp/individual/ja/literature/distribution-information/ishares-tse-listed-distribution-schedule-ja-jp.pdf ; 確認日2026-10-16 ; 前月終値出典 https://jp.investing.com/etfs/314a-historical-data ; 前月終値再確認2026-10-17 https://finance.yahoo.co.jp/quote/314A.T/history",
+      "close": 310.3,
+      "close_date": "2026-09-30",
+      "price_source": "https://finance.yahoo.co.jp/quote/314A.T/history",
+      "name": "iシェアーズ ゴールド ETF",
+      "calendar_complete": true,
+      "events": [],
+      "price_checked_at": "2026-10-17"
+    },
+    "7826": {
+      "rights": "2026/06/26",
+      "payments": "2026/09/15",
+      "earnings": "2026/08/06",
+      "dps": 165,
+      "close": 11520,
+      "close_date": "2026-09-30",
+      "status": "6月期末年1回。DPS・支払日は今回の実PDFでも確認。年内予定支払済み。",
+      "source": "https://www.furuyametals.co.jp/ir/dividend/ ; 株価 https://finance.yahoo.co.jp/quote/7826.T/history ; 確認日2026-10-16 ; 前月終値再確認2026-10-17 https://finance.yahoo.co.jp/quote/7826.T/history",
+      "name": "フルヤ金属",
+      "calendar_complete": true,
+      "events": [
+        {
+          "rights": "2026-06-26",
+          "payment": "2026-09-15",
+          "dps": 165
+        }
+      ],
+      "price_checked_at": "2026-10-17",
+      "price_source": "https://finance.yahoo.co.jp/quote/7826.T/history"
+    },
+    "4519": {
+      "rights": "2026/06/26・12/28",
+      "payments": "2026/08/28・2027年（日付未公表）",
+      "earnings": "2026/01/29",
+      "dps": 132,
+      "status": "2026年権利分66円＋66円予想。12月権利分は翌年支払のため今年の予想受取へ含めない。",
+      "source": "https://www.chugai-pharm.co.jp/ir/share/shareholder_return.html ; 確認日2026-10-16 ; 前月終値出典 https://jp.investing.com/equities/chugai-pharmaceutical-co.%2C-ltd.-historical-data ; 前月終値再確認2026-10-17 https://finance.yahoo.co.jp/quote/4519.T/history",
+      "close": 6225,
+      "close_date": "2026-09-30",
+      "price_source": "https://finance.yahoo.co.jp/quote/4519.T/history",
+      "name": "中外製薬",
+      "calendar_complete": true,
+      "events": [
+        {
+          "rights": "2026-06-26",
+          "payment": "2026-08-28",
+          "dps": 66
+        },
+        {
+          "rights": "2026-12-28",
+          "payment_year": 2027,
+          "dps": 66
+        }
+      ],
+      "price_checked_at": "2026-10-17"
+    },
+    "6501": {
+      "rights": "2026/03/27・09/28",
+      "payments": "2026/06/04・中間支払日は未確認",
+      "earnings": "2026/04/27",
+      "dps": 55,
+      "status": "3月権利27円＋9月権利28円予想。9月分の支払日・権利株数が未確定。",
+      "source": "https://www.hitachi.com/ja-jp/ir/stock/dividend/ ; https://www.hitachi.com/content/dam/hitachi/global/ja_jp/press/files/2026/04/0427/2025_Anpre.pdf ; 確認日2026-10-16 ; 前月終値出典 https://jp.investing.com/equities/hitachi%2C-ltd.-historical-data ; 前月終値再確認2026-10-17 https://finance.yahoo.co.jp/quote/6501.T/history",
+      "close": 5489,
+      "close_date": "2026-09-30",
+      "price_source": "https://finance.yahoo.co.jp/quote/6501.T/history",
+      "name": "日立製作所",
+      "calendar_complete": true,
+      "events": [
+        {
+          "rights": "2026-09-28",
+          "payment_year": 2026,
+          "dps": 28
+        }
+      ],
+      "price_checked_at": "2026-10-17"
+    },
+    "6146": {
+      "rights": "2026/03/27・09/28",
+      "payments": "2026/06/25・中間支払日は未確認",
+      "earnings": "2026/04/22",
+      "dps": 547,
+      "status": "3月権利376円＋9月権利171円予想。次の開示で改定の可能性。支払日・権利株数は未確定。",
+      "source": "https://www.disco.co.jp/jp/ir/library/doc/fr/fr20260422.pdf ; https://www.disco.co.jp/jp/ir/library/doc/film/20260723_note.pdf ; 確認日2026-10-16 ; 前月終値出典 https://jp.investing.com/equities/disco-corp-historical-data ; 前月終値再確認2026-10-17 https://finance.yahoo.co.jp/quote/6146.T/history",
+      "close": 57450,
+      "close_date": "2026-09-30",
+      "price_source": "https://finance.yahoo.co.jp/quote/6146.T/history",
+      "name": "ディスコ",
+      "calendar_complete": true,
+      "events": [
+        {
+          "rights": "2026-09-28",
+          "payment_year": 2026,
+          "dps": 171
+        }
+      ],
+      "price_checked_at": "2026-10-17"
+    },
+    "6544": {
+      "rights": "2026/03/27",
+      "payments": "2026/06/23",
+      "earnings": "2026/05/14",
+      "dps": 21,
+      "status": "3月期末年1回・21円。2026/06/23支払予定は決算短信で確認。",
+      "source": "https://www.jes24.co.jp/ja/ir/return.html ; 確認日2026-10-16 ; 前月終値出典 https://jp.investing.com/equities/japan-elevator-service-holdings-co-historical-data ; https://f.irbank.net/pdf/20260514/140120260514533079.pdf ; 前月終値再確認2026-10-17 https://jp.investing.com/equities/japan-elevator-service-holdings-co-historical-data",
+      "close": 1479.5,
+      "close_date": "2026-09-30",
+      "price_source": "https://jp.investing.com/equities/japan-elevator-service-holdings-co-historical-data",
+      "name": "ジャパンエレベーターサービスHD",
+      "calendar_complete": true,
+      "events": [
+        {
+          "rights": "2026-03-27",
+          "payment": "2026-06-23",
+          "dps": 21
+        }
+      ],
+      "price_checked_at": "2026-10-17"
+    },
+    "6745": {
+      "rights": "2026/03/27・09/28",
+      "payments": "2026/06/26・中間支払日は未確認",
+      "earnings": "2026/05/08",
+      "status": "3月権利80円(分割前)÷3＋9月権利20円予想＝分割後換算DPS。権利株数・中間支払日は要確認。",
+      "source": "https://finance.stockweather.co.jp/contents/dispPDF.aspx?disclosure=20260506517382 ; 確認日2026-10-16 ; 前月終値出典 https://jp.investing.com/equities/hochiki-corp-historical-data ; 前月終値再確認2026-10-17 https://finance.yahoo.co.jp/quote/6745.T/history",
+      "dps": 46.66666666666667,
+      "close": 1905,
+      "close_date": "2026-09-30",
+      "price_source": "https://finance.yahoo.co.jp/quote/6745.T/history",
+      "name": "ホーチキ",
+      "calendar_complete": true,
+      "events": [
+        {
+          "rights": "2026-09-28",
+          "payment_year": 2026,
+          "dps": 20
+        }
+      ],
+      "price_checked_at": "2026-10-17"
+    },
+    "6947": {
+      "rights": "2026/03/27・09/28",
+      "payments": "2026/06/29・中間支払日は未確認",
+      "earnings": "2026/05/14",
+      "status": "3月権利150円(記念100円含む)＋9月権利75円予想。中間支払日・権利株数は要確認。",
+      "source": "https://ir.zuken.co.jp/stock/ ; https://ir.zuken.co.jp/news/ ; 確認日2026-10-16 ; 前月終値出典 https://finance.stockweather.co.jp/contents/stockdetail.aspx?cntcode=JP&exctype=000&skubun=1&stkcode=6947 ; https://www.daiwair.co.jp/td_download.cgi?c=6947&i=3209092 ; https://www.daiwair.co.jp/td_download.cgi?c=6947&i=3269393 ; 前月終値再確認2026-10-17 https://finance.yahoo.co.jp/quote/6947.T/history",
+      "close": 5100,
+      "close_date": "2026-09-30",
+      "price_source": "https://finance.yahoo.co.jp/quote/6947.T/history",
+      "name": "図研",
+      "dps": 225,
+      "calendar_complete": true,
+      "events": [
+        {
+          "rights": "2026-09-28",
+          "payment_year": 2026,
+          "dps": 75
+        }
+      ],
+      "price_checked_at": "2026-10-17"
+    }
+  }
+}

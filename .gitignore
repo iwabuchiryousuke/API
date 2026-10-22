@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.venv/
+data/
+output/
+backups/
+personal_setup.enc
+*.key
+.coverage
