@@ -90,6 +90,7 @@ def fake_page():
     page.url = 'https://site.sbisec.co.jp/account/assets'
     page.is_closed.return_value = False
     page.frames = [page]
+    page.get_by_role.return_value.count.return_value = 0
     return page
 
 

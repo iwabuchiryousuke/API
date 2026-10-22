@@ -4,13 +4,17 @@ from datetime import datetime
 from decimal import Decimal
 from ledger import LedgerError,parse_date
 
+class HistoricalConflict(LedgerError):
+    """Displayed exact-date evidence contradicts another confirmed value."""
+    pass
+
 KEYS=('domestic','foreign','cash','foreign_cash')
 def init(store):
     store.db.execute('CREATE TABLE IF NOT EXISTS asset_snapshots(account TEXT NOT NULL REFERENCES accounts(id),as_of TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(account,as_of))');store.db.commit()
 def snapshots(store):
     init(store)
     return {(r['account'],r['as_of']):json.loads(r['payload']) for r in store.db.execute('SELECT * FROM asset_snapshots')}
-def save(store,account,as_of,values,source='手動確認',note='',replace=False):
+def save(store,account,as_of,values,source='手動確認',note='',replace=False,evidence=None):
     init(store);as_of=parse_date(as_of)
     if account not in ('A','B','C','D'):raise LedgerError('父の資産は管理Excelへ手入力してください。')
     payload={}
@@ -22,13 +26,15 @@ def save(store,account,as_of,values,source='手動確認',note='',replace=False)
         if not x.is_finite() or x<0:raise LedgerError('資産額には0以上の有限数値を入力してください。')
         payload[k]=float(x)
     payload.update(source=source,note=note,recorded_at=datetime.now().astimezone().isoformat())
+    if evidence is not None:payload['evidence']=evidence
     previous=store.db.execute('SELECT payload FROM asset_snapshots WHERE account=? AND as_of=?',(account,as_of)).fetchone()
     if previous and not replace:
         old=json.loads(previous['payload'])
-        if all(old.get(k)==payload[k] for k in KEYS+('growth_remaining','tsumitate_remaining')) and old.get('source')==source and old.get('note','')==note:return False
+        if all(old.get(k)==payload[k] for k in KEYS+('growth_remaining','tsumitate_remaining')) and old.get('source')==source and old.get('note','')==note and old.get('evidence')==evidence:return False
         raise LedgerError('同じ日付の資産額が登録済みで内容が異なります。上書きを避けて停止しました。')
     store.backup()
     with store.db:store.db.execute('INSERT OR REPLACE INTO asset_snapshots VALUES (?,?,?)',(account,as_of,json.dumps(payload,ensure_ascii=False)))
+    return True
 
 def parse_asset_text(text):
     """Strict SBI displayed JPY totals only; do not infer from buying power.
@@ -210,3 +216,137 @@ def capture_month_start(store,account,text,tables):
     y,m,_=map(int,dates[0]);dt=f'{y:04}-{m:02}-01'
     save(store,account,dt,values,'SBI My資産の前月比','当月1日07:00基準＝評価額−前月比。未確認項目は空欄。')
     return 1
+
+# Exact-date history is deliberately separate from the monthly-difference
+# baseline. A first-day 07:00 derivation does not establish a calendar boundary.
+SNAPSHOT_FIELDS=KEYS+('growth_remaining','tsumitate_remaining')
+_HISTORY_COLUMNS={
+ '国内株式等(円)':'domestic','国内資産合計(円)':'domestic',
+ '外国株式(円)':'foreign','外国資産合計(円)':'foreign',
+ '現金合計(円)':'cash','現金残高等(合計)(円)':'cash',
+ '外貨現金(円)':'foreign_cash','外貨預り金(円換算)':'foreign_cash',
+ '成長枠残高(円)':'growth_remaining','成長投資枠残高(円)':'growth_remaining',
+ 'NISA成長投資枠残高(円)':'growth_remaining','NISA(成長投資枠)投資可能額(円)':'growth_remaining',
+ '積立枠残高(円)':'tsumitate_remaining','つみたて投資枠残高(円)':'tsumitate_remaining',
+ 'NISAつみたて投資枠残高(円)':'tsumitate_remaining','NISA(つみたて投資枠)投資可能額(円)':'tsumitate_remaining',
+}
+_DATE_COLUMNS={'日付','基準日','評価基準日','資産評価日','年月日','対象日'}
+
+def source_date(value):
+    raw=unicodedata.normalize('NFKC',str(value)).strip()
+    match=re.fullmatch(r'(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})(?:日)?(?:\s*[（(][月火水木金土日][）)])?',raw)
+    if not match:raise LedgerError('表示日付を特定できません。')
+    return parse_date('%04d-%02d-%02d'%tuple(map(int,match.groups())))
+
+def displayed_asset_date(text):
+    """A displayed source date, never an input's requested value."""
+    text=unicodedata.normalize('NFKC',text)
+    dates=[]
+    for match in re.finditer(r'(?:評価基準日|基準日時|資産評価日|残高基準日|対象日|基準日)[\s:：]*(\d{4}[年/-]\d{1,2}[月/-]\d{1,2}日?)',text):
+        dates.append(source_date(match[1]))
+    for match in re.finditer(r'(\d{4}[年/-]\d{1,2}[月/-]\d{1,2}日?)\s*(?:時点|現在の資産)',text):
+        dates.append(source_date(match[1]))
+    # A My資産 timestamp is a displayed valuation timestamp. If an explicit
+    # heading and timestamp disagree, keep the ambiguity instead of picking one.
+    for match in re.finditer(r'(\d{4}/\d{1,2}/\d{1,2})\s+\d{1,2}:\d{2}(?::\d{2})?',text):
+        dates.append(source_date(match[1]))
+    if len(set(dates))!=1:raise LedgerError('指定日資産の表示基準日を一意に確認できません。')
+    return dates[0]
+
+def exact_table_values(tables,target_date):
+    """Only date-bound rows and explicitly JPY-denominated total columns."""
+    target=parse_date(target_date);found={}
+    for rows in tables:
+        day_index=None;columns={}
+        for row in rows:
+            header=[normalized(cell) for cell in row]
+            indexes=[i for i,cell in enumerate(header) if cell in _DATE_COLUMNS]
+            if len(indexes)==1:
+                day_index=indexes[0];columns={i:_HISTORY_COLUMNS[cell] for i,cell in enumerate(header) if cell in _HISTORY_COLUMNS}
+                continue
+            if day_index is None or not columns or len(row)<=max([day_index]+list(columns)):continue
+            try:day=source_date(row[day_index])
+            except LedgerError:continue
+            if day!=target:continue
+            for index,key in columns.items():
+                value=cell_money(row[index],True)
+                if value is None:continue
+                if key in found and found[key]!=value:raise HistoricalConflict('同じ基準日の履歴行に異なる資産額があります。')
+                found[key]=value
+    return found
+
+def exact_panel_values(text,tables,target_date,allow_nisa=False):
+    """A single displayed-date panel. It must not combine a current summary
+    outside the panel with historical assets inside it. Browser acquisition
+    passes a scoped dated region, never the whole mixed screen, for NISA.
+    """
+    target=parse_date(target_date)
+    if displayed_asset_date(text)!=target:raise LedgerError('表示基準日が指定日と一致しません。現在値を過去日へ保存しません。')
+    found={}
+    # Labelled total rows in a date-scoped panel, including div layouts.
+    lines=[line.strip() for line in unicodedata.normalize('NFKC',text).splitlines() if line.strip()]
+    for index,line in enumerate(lines):
+        key=_HISTORY_COLUMNS.get(normalized(line))
+        if key in ('growth_remaining','tsumitate_remaining') and not allow_nisa:continue
+        if key and index+1<len(lines):
+            value=money(lines[index+1],True)
+            if value is not None:
+                if key in found and found[key]!=value:raise HistoricalConflict('指定日領域の資産額が重複しています。')
+                found[key]=value
+    # Tables may have product/value rows rather than dates across columns.
+    try:raw=extract_observations(text,tables)
+    except LedgerError as error:raise HistoricalConflict('指定日領域の商品別資産額が一致しません。') from error
+    if all(raw.get(key) is not None for key in ('domestic','fund','bond')):
+        found.setdefault('domestic',raw['domestic']+raw['fund']+raw['bond'])
+    if all(raw.get(key) is not None for key in ('foreign','usd_fund','usd_bond')):
+        found.setdefault('foreign',raw['foreign']+raw['usd_fund']+raw['usd_bond'])
+    if raw.get('cash') is not None and raw.get('bank') is not None:found.setdefault('cash',raw['cash']+raw['bank'])
+    if raw.get('foreign_cash') is not None:found.setdefault('foreign_cash',raw['foreign_cash'])
+    if allow_nisa:
+        from sbi_views import parse_summary,ObservationConflict
+        try:summary=parse_summary(text,tables)
+        except ObservationConflict as error:
+            raise HistoricalConflict('指定日領域のNISA・現金表示が一致しません。') from error
+        except LedgerError:summary={}
+        for key in ('growth_remaining','tsumitate_remaining'):
+            value=summary.get(key,{})
+            if value.get('year')==int(target[:4]):found[key]=value['remaining']
+    return found
+
+def exact_fields(payload):
+    if not payload:return set()
+    evidence=payload.get('evidence',{})
+    if evidence.get('method')=='displayed-date':return set(evidence.get('fields',()))&set(SNAPSHOT_FIELDS)
+    # These legacy sources were explicitly dated. Acquisition-day and derived
+    # monthly baselines are intentionally excluded.
+    if payload.get('source') in ('手動確認','SBI My資産履歴','SBI My資産'):
+        return {key for key in SNAPSHOT_FIELDS if payload.get(key) is not None}
+    return set()
+
+def merge_exact(store,account,as_of,values,source='SBI 指定日資産',note='表示基準日を直接確認。',observed_at=None):
+    """Add exact evidence without clearing manual or separately verified data."""
+    as_of=parse_date(as_of)
+    incoming={key:values[key] for key in SNAPSHOT_FIELDS if values.get(key) is not None}
+    if not incoming:return False
+    old=snapshots(store).get((account,as_of));fields=exact_fields(old)
+    for key,value in incoming.items():
+        if key in fields and old.get(key)!=value:raise HistoricalConflict('同じ基準日の確認済み資産と取得値が一致しません。既存値を保持しました。')
+    if old and not old.get('source','').startswith('SBI'):
+        # The user's dated manual record owns this row, including its blanks.
+        return False
+    merged={key:(old.get(key) if old and key in fields else None) for key in SNAPSHOT_FIELDS}
+    for key,value in incoming.items():merged[key]=value
+    if old and set(incoming)<=fields and all(old.get(key)==value for key,value in incoming.items()):return False
+    evidence={'method':'displayed-date','as_of':as_of,'fields':sorted(fields|set(incoming))}
+    if observed_at is not None:evidence['observed_at']=observed_at
+    return save(store,account,as_of,merged,source,note,replace=bool(old),evidence=evidence)
+
+def historical_status(store,account,target_dates):
+    rows=snapshots(store);result={}
+    for target in target_dates:
+        target=parse_date(target);payload=rows.get((account,target));fields=exact_fields(payload)
+        available=[key for key in SNAPSHOT_FIELDS if key in fields and payload.get(key) is not None]
+        missing=[key for key in SNAPSHOT_FIELDS if key not in available]
+        result[target]={'complete':not missing,'available':available,'missing':missing,
+                        'source':payload.get('source') if payload else None}
+    return result

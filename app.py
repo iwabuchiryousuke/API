@@ -9,7 +9,6 @@ import webbrowser
 from ledger import Store,LedgerError
 from standalone_excel import export_trades
 from activity import Activities
-from pdf_batch import preflight as preflight_pdfs,import_all as import_all_pdfs
 from login_credentials import (CredentialError,delete_credentials,has_credentials,
                                save_credentials)
 
@@ -25,31 +24,30 @@ class App:
         style=ttk.Style();style.theme_use('clam');style.configure('.',font=('Yu Gothic UI',10));style.configure('Title.TLabel',font=('Yu Gothic UI',17,'bold'))
         outer=ttk.Frame(root,padding=22);outer.pack(fill='both',expand=True)
         ttk.Label(outer,text=f'家族の売買記録　v{APP_VERSION}',style='Title.TLabel').pack(anchor='w')
-        ttk.Label(outer,text='A～EのPDF・配当・分割を記録 → 「取引」「配当」の2シートを出力').pack(anchor='w',pady=(5,12))
+        ttk.Label(outer,text='4口座のPDF・資産・NISAを取得 → 内容確認 → 全口座へ一括反映・Excel出力').pack(anchor='w',pady=(5,12))
         from family_profile import configure
         configure(self.store)
         self.buttons=[]
         bar=ttk.Frame(outer);bar.pack(fill='x')
         ttk.Label(bar,text='取り込み先の口座').pack(side='left')
         self.account=ttk.Combobox(bar,state='readonly',width=29);self.account.pack(side='left',padx=8)
-        for label,fn in [('口座名を設定',self.rename),('銘柄名・コードを設定',self.set_security_names),('PDFを取り込む（複数可）',self.import_many_pdfs)]:
+        for label,fn in [('口座名を設定',self.rename),('銘柄名・コードを設定',self.set_security_names),('手元のPDFを保存（選択口座）',self.import_many_pdfs)]:
             b=ttk.Button(bar,text=label,command=fn);b.pack(side='left',padx=4);self.buttons.append(b)
         ttk.Label(outer,text='PDFは選択口座の data／電子ポストPDF／A～E を最初に開きます。名義は別口座の誤登録を止める確認項目です。').pack(anchor='w',pady=(10,0))
         epost=ttk.Frame(outer);epost.pack(fill='x',pady=(8,0))
-        for label,fn in [('選択口座を自動取得',self.collect_epost),('保存したPDFのフォルダを開く',self.open_collected_pdfs),('PDF取得結果一覧',self.open_collection_audit),('配当・税還・利息を手動追加',self.add_cash_entry),('分割を登録',self.add_split)]:
+        for label,fn in [('選択口座のPDFだけ取得',self.collect_epost),('保存したPDFのフォルダを開く',self.open_collected_pdfs),('PDF取得結果一覧',self.open_collection_audit),('配当・税還・利息を手動追加',self.add_cash_entry),('分割を登録',self.add_split)]:
             b=ttk.Button(epost,text=label,command=fn);b.pack(side='left',padx=4);self.buttons.append(b)
         extra=ttk.Frame(outer);extra.pack(fill='x',pady=(8,0))
-        for label,fn in [('4口座収集→確認→登録→出力',self.auto_collect),('資産額を記録',self.record_assets),('Gmailだけ診断',self.check_gmail),('説明書を開く',self.open_guide)]:
+        for label,fn in [('4口座のPDF・資産・NISAを取得して一括反映',self.auto_collect),('取得した資産を確認',self.show_assets)]:
             b=ttk.Button(extra,text=label,command=fn);b.pack(side='left',padx=4);self.buttons.append(b)
         settings=ttk.Menubutton(extra,text='口座・認証の設定')
         menu=tk.Menu(settings,tearoff=False)
-        for label,fn in [('PDF名義を確認・変更',self.set_pdf_owner),('SBIログイン情報',self.set_login_credentials),('Gmail連携を設定',self.connect_gmail)]:
+        for label,fn in [('PDF名義を確認・変更',self.set_pdf_owner),('SBIログイン情報',self.set_login_credentials),('Gmail連携を設定',self.connect_gmail),('Gmailだけ診断',self.check_gmail),('選択口座の資産だけ再取得',self.auto_assets),('資産額を手動記録',self.record_assets),('診断ZIPを作成',self.export_diagnostics),('説明書を開く',self.open_guide)]:
             menu.add_command(label=label,command=fn)
         settings.configure(menu=menu);settings.pack(side='left',padx=4);self.buttons.append(settings)
         unified=ttk.Frame(outer);unified.pack(fill='x',pady=(8,0))
-        b=ttk.Button(unified,text='保存PDFをまとめて更新（A～E）',command=self.update_saved);b.pack(side='left',padx=4);self.buttons.append(b)
-        b=ttk.Button(unified,text='選択口座の資産だけ自動取得',command=self.auto_assets);b.pack(side='left',padx=4);self.buttons.append(b)
-        b=ttk.Button(unified,text='取得した資産を確認',command=self.show_assets);b.pack(side='left',padx=4);self.buttons.append(b)
+        b=ttk.Button(unified,text='取得済みPDFを全口座へ一括反映（A～E）',command=self.update_saved);b.pack(side='left',padx=4);self.buttons.append(b)
+        ttk.Label(unified,text='個別取得は保存だけ。反映は全口座をまとめて確認します。').pack(side='left',padx=10)
         self.refresh_accounts()
         exportbar=ttk.Frame(outer);exportbar.pack(fill='x',pady=16)
         ttk.Label(exportbar,text='対象月末まで（空欄＝全期間）').pack(side='left')
@@ -183,7 +181,7 @@ class App:
             a=self.selected()
             if a['id']=='E':raise LedgerError('父のPDFは保存フォルダへ手動で入れてください。')
             from update_dialog import launch
-            launch(self,BASE,online=True,accounts=[a['id']])
+            launch(self,BASE,online=True,accounts=[a['id']],acquire_only=True)
         except LedgerError as e:messagebox.showerror('口座を確認',str(e))
 
     def set_security_names(self):
@@ -210,49 +208,25 @@ class App:
         webbrowser.open(files[-1].resolve().as_uri())
 
     def import_many_pdfs(self):
+        """Put selected originals in the account folder; apply only as a batch."""
         try:
-            a=self.selected()
-            initial=BASE/'data'/'電子ポストPDF'/a['id'];initial.mkdir(parents=True,exist_ok=True)
-            paths=filedialog.askopenfilenames(title=f'口座{a["id"]}・{a["label"]}のPDFを選択（複数可）',initialdir=initial,filetypes=[('PDF','*.pdf')])
+            account=self.selected()
+            initial=BASE/'data'/'電子ポストPDF'/account['id'];initial.mkdir(parents=True,exist_ok=True)
+            paths=filedialog.askopenfilenames(title=f"口座{account['id']}のPDFを保存（反映は全口座一括）",initialdir=initial,filetypes=[('PDF','*.pdf')])
             if not paths:return
-            pending,skipped=preflight_pdfs(self.store,a['id'],paths,skip_unreadable=True)
-            if not pending:
-                details='\n'.join(f'{p.name}：{reason}' for p,reason in skipped)
-                messagebox.showwarning('登録できるPDFがありません',
-                    f'{len(skipped)}件は登録対象外・解析済み0円・未対応等でした。売買記録は変更していません。\n\n{details[:3000]}')
-                return
-            lines=[]
-            for path,kind,doc,added,existing,already in pending:
-                if kind=='trade':
-                    description=f'{len(doc.trades)}取引（新規 {added}件／登録済みと照合 {existing}件）\n'+'\n'.join(
-                        f'      {t["trade_date"]} {t["name"]} {t["side"]}{t["quantity"]}{t.get("quantity_unit","株")} {t["settlement_amount"]}円 [{t["market"]}]'
-                        for t in doc.trades)
-                elif kind=='notice':
-                    e=doc.item;description=f'{e["date"]} {e["name"]} {e["type"]} '+(f'{e["after"]}株' if e['type']=='株式分割' else f'{e["net"]}円')
-                else:
-                    description=f'{doc.item["as_of"]} 残高報告書 {len(doc.item["holdings"])}銘柄'
-                    if doc.item.get('warning'):description+=f'（{doc.item["warning"]}）'
-                state='登録済み' if already else '資料を追加' if existing and not added else '新規と照合あり' if existing else '新規'
-                owner=f'名義：{doc.owner}' if doc.owner else '名義：原本で確認'
-                lines.append(f'{path.name}\n    {description}　{state}　{owner}')
-            if skipped:
-                lines.append('【登録しないPDF：対象外または未対応】\n'
-                    +'\n'.join(f'{p.name}：{reason}' for p,reason in skipped))
-            dialog=tk.Toplevel(self.root);dialog.title('PDFの登録内容を確認');dialog.geometry('850x500');dialog.transient(self.root)
-            ttk.Label(dialog,text=f'登録先：{a["id"]}：{a["label"]} ／ 登録可能 {len(pending)}件・未対応 {len(skipped)}件',font=('Yu Gothic UI',12,'bold')).pack(anchor='w',padx=15,pady=10)
-            ttk.Label(dialog,text='残高報告書は名義を自動照合できません。すべてのPDFの口座・内容を原本で確認してください。').pack(anchor='w',padx=15)
-            box=tk.Text(dialog,wrap='word');box.pack(fill='both',expand=True,padx=15,pady=10)
-            box.insert('1.0','\n\n'.join(lines));box.configure(state='disabled')
-            confirmed={'yes':False}
-            row=ttk.Frame(dialog);row.pack(pady=(0,12))
-            def decide(ok):confirmed['yes']=ok;dialog.destroy()
-            ttk.Button(row,text='登録する',command=lambda:decide(True)).pack(side='left',padx=8)
-            ttk.Button(row,text='やめる',command=lambda:decide(False)).pack(side='left',padx=8)
-            dialog.grab_set();self.root.wait_window(dialog)
-            if confirmed['yes']:
-                results=import_all_pdfs(self.store,a['id'],pending);self.refresh()
-                messagebox.showinfo('PDFを登録しました',f'{len(results)}件のPDFを確認しました。新規資料・取引はExcel再出力で確認できます。')
-        except (LedgerError,OSError) as e:messagebox.showerror('PDFを登録できません',str(e))
+            from epost_collector import save_pdf,MAX_PDF_BYTES
+            saved=known=0;errors=[]
+            for value in paths:
+                source=Path(value)
+                try:
+                    if source.stat().st_size>MAX_PDF_BYTES:raise ValueError('PDFの保存上限を超えています。')
+                    _,created=save_pdf(BASE/'data'/'電子ポストPDF',account['id'],'手動選択',source.stem,source.read_bytes())
+                    saved+=int(created);known+=int(not created)
+                except (ValueError,OSError):errors.append(source.name)
+            note=f'新規保存 {saved}件／保存済み {known}件。台帳への反映はまだ行っていません。\n「取得済みPDFを全口座へ一括反映」で内容を確認してください。'
+            if errors:note+='\n保存できなかったPDF：'+'、'.join(errors[:5])
+            (messagebox.showwarning if errors else messagebox.showinfo)('PDFの保存',note)
+        except (LedgerError,OSError) as error:messagebox.showerror('PDFを保存できません',str(error))
 
     def edit_market(self):
         subprocess.Popen([sys.executable,str(BASE/'market_editor.py')],cwd=BASE)
@@ -273,6 +247,16 @@ class App:
     def update_saved(self):
         from update_dialog import launch
         launch(self,BASE,online=False)
+
+    def export_diagnostics(self):
+        if self.busy:return
+        destination=filedialog.asksaveasfilename(title='診断ZIPを保存',defaultextension='.zip',initialfile='family_trades_diagnostics.zip',filetypes=[('ZIP','*.zip')])
+        if not destination:return
+        try:
+            from diagnostic_bundle import create_bundle
+            result=create_bundle(BASE,Path(destination))
+            messagebox.showinfo('診断ZIPを保存しました',str(result['path'])+'\n認証設定・取引台帳・PDF原本は含めません。診断には氏名や資産額が残る場合があるため、共有前に内容を確認してください。')
+        except (LedgerError,OSError,ValueError):messagebox.showerror('診断ZIPを作成できません','保存先・空き容量を確認してください。元データは変更していません。')
 
     def connect_gmail(self):
         try:

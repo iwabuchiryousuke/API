@@ -1,17 +1,48 @@
 {
-  "tests": 277,
+  "version": "3.5.13",
+  "baseline_commit": "e1b5d77955360e6e4149d1aac3982797b0b4d36c",
+  "tests": 395,
   "failures": 0,
   "errors": 0,
   "skipped": 0,
   "expected_failures": 0,
   "unexpected_successes": 0,
-  "seconds": 29.87,
+  "seconds": 43.314,
   "successful": true,
+  "test_source": "isolated extraction of code release ZIP; subsequent documentation-only results update",
+  "offline_browser_tests": 28,
+  "code_update_tests": 31,
   "packaged_tests": {
-    "tests": 277,
+    "tests": 395,
     "failures": 0,
     "errors": 0,
     "skipped": 0
   },
-  "code_zip_sha256": "690499775cad7e6511140b17aecc2e6a89faaa462ab12c7278e107c9a856085e"
+  "source_data": {
+    "files_unchanged": 254,
+    "pdf_files": 155,
+    "unique_pdf_documents": 99,
+    "supported_documents": 59,
+    "explicit_exclusions": 40,
+    "latest_upload_read": false,
+    "latest_upload_blocker": "32 MiB executor transfer limit"
+  },
+  "excel": {
+    "uploaded_data_ooxml_entries_identical": 8,
+    "golden_standard_entries": 8,
+    "golden_management_entries": 13,
+    "exporter_or_layout_changed": false
+  },
+  "release_upgrade": {
+    "from_version": "3.5.12",
+    "to_version": "3.5.13",
+    "changed_files": 31,
+    "manifest_verified": true,
+    "protected_fixtures_unchanged": true,
+    "repeat_no_changes": true,
+    "backup_manifest_verified": true
+  },
+  "live_sbi_tested": false,
+  "windows_tested": false,
+  "code_zip_sha256": "486df59cf4b3518a5b2281a769b3a886df5793d8d18a76cbebbaab5c160a4ae6"
 }

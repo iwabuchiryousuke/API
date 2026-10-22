@@ -149,6 +149,7 @@ class AutomaticAcquisition(unittest.TestCase):
             'auto_login.collect': Mock(return_value=(2,0,0)),
             'sbi_views.capture_account': Mock(side_effect=CredentialError('別口座の名義') if identity_failure else None, return_value=True),
             'sbi_views.capture_status': Mock(return_value={'available':['cash'], 'missing':[], 'usd_cash_observed':True}),
+            'acquisition_journal.persist_capture': Mock(return_value=None),
         }
         with ExitStack() as stack:
             for name, value in mocks.items():stack.enter_context(patch(name,value))

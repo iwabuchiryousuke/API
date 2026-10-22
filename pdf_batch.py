@@ -21,6 +21,12 @@ def classify(path):
     # over those incidental words; none of them changes the document's type.
     if any(marker in first for marker in ('STWHZB','FR00011M01')):
         return 'balance',parse_balance(path)
+    # This is a known document type, but its foreign-currency corporate action
+    # is not parsed. Recognize the PDF's own title, never the downloaded file
+    # name: an unreadable or unrelated PDF must still stop the update.
+    if '外国株式等株式分割・権利売却等のご案内' in first:
+        raise LedgerError('対象外：外国株式等株式分割・権利売却等のご案内（未解析）。'
+                          '国内株式の株数・売却代金には反映しません。PDF原本を保持し、内容・通貨を確認してください。')
     if '外国債券利金' in first and '償還金お支払のご案内' in first:
         raise LedgerError('対象外：外国債券の利金・償還金。円額と利金部分を原本で確認し、利息は手動登録してください。')
     # Exclude these before looking for the generic words "取引報告書".  This

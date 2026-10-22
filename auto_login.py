@@ -156,13 +156,14 @@ def authenticated_page(context,owner,timeout=30,cancelled=lambda:False):
         time.sleep(.5)
     raise CredentialError('ログイン後の口座名義を確認できません。別口座への保存を防ぐため停止しました。')
 
-def open_electronic_post(page,context,progress=lambda _:None,cancelled=lambda:False):
+def open_electronic_post(page,context,progress=lambda _:None,cancelled=lambda:False,manual_seconds=180):
     from sbi_navigation import open_post_resilient
-    return open_post_resilient(page,context,progress=progress,cancelled=cancelled)
+    return open_post_resilient(page,context,progress=progress,cancelled=cancelled,manual_seconds=manual_seconds)
 
-def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lambda message:None,cancelled=lambda:False,documents=True):
+def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lambda message:None,cancelled=lambda:False,documents=True,capture_assets=True,target_dates=()):
     assets_observed=False
     if account not in tuple('ABCD'):raise CredentialError('SBIの自動取得は口座A～Dです。')
+    if not documents and not capture_assets:raise CredentialError('取得する内容が選択されていません。')
     if cancelled():raise CredentialError('中止しました。')
     api,recipient=gmail_session or service(BASE/'data',account)
     store=asset_store or Store(BASE/'data')
@@ -217,28 +218,61 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
         if not documents:page=authenticated_page(context,owner,cancelled=cancelled)
         if cancelled():raise CredentialError('中止しました。')
         saved=duplicate=failed=0
+        pdf_error=None
         if documents:
             stage='電子ポストへ移動・名義確認';progress(f'口座{account}：{stage}')
-            post=open_electronic_post(page,context,progress=progress,cancelled=cancelled)
-            verify_post_owner(post,owner,progress=lambda msg:progress(f'口座{account}：{msg}'),cancelled=cancelled)
-            progress(f'口座{account}：電子ポストの名義一致を確認しました。')
-            stage='PDFの保存';progress(f'口座{account}：{stage}')
-            saved,duplicate,failed=collect(post,context,account,BASE/'data'/'電子ポストPDF',progress=progress,cancelled=cancelled)
-            progress(f'口座{account}：PDF 新規{saved}・保存済み{duplicate}・失敗{failed}。')
-            if failed:raise CredentialError('一部書類の収集に失敗しました。保存済みPDFを保持して、この口座の登録を止めました。')
+            try:
+                post=open_electronic_post(page,context,progress=progress,cancelled=cancelled,manual_seconds=0 if capture_assets else 180)
+            except CredentialError:
+                if cancelled() or not capture_assets:raise
+                # No PDF owner check succeeded. Asset fallback therefore needs
+                # an independent positive SBI owner check in this same context.
+                page=authenticated_page(context,owner,timeout=5,cancelled=cancelled)
+                pdf_error='電子ポストへの自動移動を完了できませんでした。'
+            else:
+                # A mismatch here never becomes a recoverable navigation error.
+                verify_post_owner(post,owner,progress=lambda msg:progress(f'口座{account}：{msg}'),cancelled=cancelled)
+                progress(f'口座{account}：電子ポストの名義一致を確認しました。')
+                stage='PDFの保存';progress(f'口座{account}：{stage}')
+                try:
+                    saved,duplicate,failed=collect(post,context,account,BASE/'data'/'電子ポストPDF',progress=progress,cancelled=cancelled)
+                    progress(f'口座{account}：PDF 新規{saved}・保存済み{duplicate}・失敗{failed}。')
+                    if failed:pdf_error='一部書類の収集を完了できませんでした。'
+                except Exception as error:
+                    if cancelled():raise CredentialError('中止しました。')
+                    pdf_error=str(error) if isinstance(error,CredentialError) else 'PDF一覧・保存の処理を完了できませんでした。取得結果を確認してください。'
+            if pdf_error and capture_assets:progress(f'口座{account}：{pdf_error} 資産の取得は続けます。')
+        if not capture_assets:
+            if pdf_error:raise CredentialError(pdf_error+' 保存済みPDFは保持しています。台帳への反映は行っていません。')
+            return {'complete':True,'pdf_collected':documents,'assets_observed':False,'saved':saved,'duplicate':duplicate}
         # Preserve PDFs before navigating unrelated asset pages.
         stage='口座サマリー・My資産の取得';progress(f'口座{account}：{stage}')
         store=asset_store or Store(BASE/'data')
-        from asset_snapshots import KEYS
-        status={'available':[],'missing':list(KEYS),'usd_cash_observed':False}
+        from asset_snapshots import KEYS,HistoricalConflict
+        status={'available':[],'missing':list(KEYS)+['growth_remaining','tsumitate_remaining'],'usd_cash_observed':False}
         from sbi_views import _jst_now
+        from acquisition_journal import persist_capture,JournalError
         capture_started=_jst_now().isoformat()
+        journal_saved=False
         try:
-            assets_observed=capture_account(page,store,account,progress,owner=owner,cancelled=cancelled,identity_verified=True,diagnostics=BASE/'data'/'diagnostics')
+            assets_observed=capture_account(page,store,account,progress,owner=owner,cancelled=cancelled,identity_verified=True,diagnostics=BASE/'data'/'diagnostics',target_dates=target_dates)
             from sbi_views import capture_status
             status=capture_status(store,account,since=capture_started)
+            # Current coverage and exact-date coverage are reported separately.
+            # A missing historical field must not mislabel verified current data.
+            assets_observed=status.get('complete',assets_observed)
+            if cancelled():raise CredentialError('中止しました。')
+            stage='資産取得証跡の保存'
+            try:journal=persist_capture(BASE,account,owner,store,capture_started,target_dates=target_dates)
+            except (JournalError,OSError):raise CredentialError('取得済み資産の証跡を保存できません。空き容量・保存先を確認してください。台帳への一括反映は停止しました。') from None
+            journal_saved=bool(journal)
+            if journal_saved:progress(f'口座{account}：確認できた資産の取得証跡を保存しました。一括反映の確認後に台帳へ登録します。')
         except CredentialError:
             raise
+        except JournalError:
+            raise CredentialError('取得済み資産の証跡を保存できません。空き容量と診断を確認してください。台帳への一括反映は停止しました。') from None
+        except HistoricalConflict:
+            raise CredentialError('指定日の資産表示と確認済み記録が一致しません。既存値を保持し、今回の一括反映を停止しました。診断とSBIの表示基準日を確認してください。') from None
         except Exception:
             if cancelled():raise CredentialError('中止しました。')
             assets_observed=False
@@ -246,6 +280,10 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
         finally:
             if asset_store is None:store.close()
         if cancelled():raise CredentialError('中止しました。')
+        if pdf_error:
+            stage='PDF取得の完了確認'
+            retained='保存済みPDFと確認できた資産の取得証跡は保持しています。' if journal_saved else '保存済みPDFは保持しています。資産の未取得項目は診断で確認してください。'
+            raise CredentialError(pdf_error+' '+retained+'台帳への一括反映は未完了です。')
         if not documents and not status['available']:raise CredentialError('資産情報を確認できませんでした。資産画面の診断を確認してください。')
         missing=list(status['missing'])
         if not status['usd_cash_observed']:missing.append('usd_cash')

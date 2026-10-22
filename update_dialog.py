@@ -7,7 +7,25 @@ from version import APP_VERSION
 
 PHASES={'ACCOUNT_FAILED':'この口座の収集失敗・次の口座へ','AUTHORIZING':'Gmail連携を確認中','COLLECTING':'SBIから収集中','CHECKING_PDF':'PDFを検査中','PREPARING_EXCEL':'Excelを作成中','COMMITTING':'確認済みデータを登録中','DATA_COMMITTED':'登録完了・Excelを配置中','COMPLETED':'完了','COMPLETED_WITH_WARNINGS':'完了（未取得項目あり）','FAILED':'停止','CANCELLED':'中止','OUTPUT_PENDING':'登録完了・出力待ち'}
 
-def launch(app,base,online=False,accounts=None,assets_only=False):
+def warning_lines(warnings):
+    lines=[]
+    labels={'domestic':'国内株式等','foreign':'外国株式（円評価）','cash':'円の現金合計','foreign_cash':'外貨現金（円評価）','growth_remaining':'NISA成長枠','tsumitate_remaining':'NISA積立枠','usd_cash':'米ドル現金（元通貨）'}
+    excluded=[x for x in warnings if x.startswith('PDF_NOT_PARSED:')]
+    if excluded:lines.append(f'未解析PDF {len(excluded)}件：原本は保持し、取引には反映しません。書類名と理由を下の一覧で確認してください。')
+    for warning in dict.fromkeys(warnings):
+        if warning=='SAVED_FILES_ONLY':lines.append('保存済みPDF・取得証跡から更新します。今回はSBIへ接続していません。')
+        elif warning.startswith('ASSET_FIELDS_MISSING:'):
+            _,account,keys=warning.split(':',2)
+            lines.append('口座'+account+'の現在資産で未取得：'+'、'.join(labels.get(k,k) for k in keys.split(',')))
+        elif warning.startswith('ASSET_DATE_INCOMPLETE:'):
+            _,account,day=warning.split(':',2)
+            lines.append('口座'+account+'・'+day+'：指定日の資産/NISAに未確認項目があります。現在値や推計値で代用しません。')
+        elif warning.startswith('ASSETS_NOT_OBSERVED_'):lines.append('口座'+warning[-1]+'：今回、現在資産の全項目を確認できていません。')
+        elif warning.startswith('MANUAL_ASSET_PRESERVED:'):lines.append('手動で登録済みの資産額を保持しました。取得証跡の一覧で確認してください。')
+        elif not warning.startswith('PDF_NOT_PARSED:'):lines.append(str(warning))
+    return lines
+
+def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=False):
     if app.busy:return
     month=app.month.get().strip()
     try:app.store.records(month)
@@ -30,7 +48,7 @@ def launch(app,base,online=False,accounts=None,assets_only=False):
         if missing:messagebox.showerror('初回設定が必要です','初回設定キーを登録してください。アプリを再起動すると初回設定を開きます。\n'+'\n'.join(missing));return
     app.busy=True
     for b in app.buttons:b.configure(state='disabled')
-    dialog=tk.Toplevel(app.root);dialog.title('資産の自動取得' if assets_only else 'まとめて更新');dialog.geometry('880x580');dialog.transient(app.root)
+    dialog=tk.Toplevel(app.root);dialog.title('選択口座のPDF取得（未反映）' if acquire_only else '資産の自動取得' if assets_only else '全口座をまとめて更新');dialog.geometry('880x580');dialog.transient(app.root)
     status=tk.StringVar(value='開始しています');ttk.Label(dialog,textvariable=status,padding=12).pack(anchor='w')
     details=tk.Text(dialog,wrap='word',height=24);details.pack(fill='both',expand=True,padx=12)
     actions=ttk.Frame(dialog);actions.pack(pady=12)
@@ -41,7 +59,7 @@ def launch(app,base,online=False,accounts=None,assets_only=False):
     def write_diagnostics():
         from datetime import datetime
         folder=base/'data'/'diagnostics';folder.mkdir(parents=True,exist_ok=True)
-        file=folder/('auto_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'.txt')
+        file=folder/('auto_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f')+'.txt')
         file.write_text(f'v{APP_VERSION} 自動取得診断（画面・メール本文・認証コードなし）\n'+'\n'.join(diagnostics),encoding='utf-8')
         return file
     def stop():cancel.set();decision.set();status.set('中止要求を受け付けました。現在の処理が戻るまでお待ちください。')
@@ -55,21 +73,27 @@ def launch(app,base,online=False,accounts=None,assets_only=False):
     def worker():
         from login_credentials import CredentialError
         try:
-            flow=Workflow(base,progress=lambda **x:events.put(('progress',x)),cancelled=cancel.is_set)
+            from update_operations import collect_and_apply,acquire_selected_pdf,apply_saved
+            progress=lambda **x:events.put(('progress',x))
+            message=lambda msg:events.put(('message',msg))
             if online:
                 from playwright.sync_api import sync_playwright
                 from auto_login import run_one
                 from gmail_auth import ensure_service
-                sessions={};auth_errors=[]
-                for account in (accounts or 'ABCD'):
-                    if account=='E':continue
-                    if cancel.is_set():raise Cancelled()
-                    events.put(('progress',{'phase':'AUTHORIZING','account':account}))
-                    try:sessions[account]=ensure_service(base/'data',account,lambda msg:events.put(('message',msg)))
-                    except CredentialError as e:auth_errors.append(f'口座{account}：{e}')
-                if auth_errors:raise CredentialError('Gmail連携を完了できませんでした。\n'+'\n'.join(auth_errors))
-                with sync_playwright() as pw:result=flow.run(month,collect=lambda a,s:run_one(pw,a,s,gmail_session=sessions[a],progress=lambda msg:events.put(('message',msg)),cancelled=cancel.is_set,documents=not assets_only),review=review,accounts=accounts,include_saved_pdfs=not assets_only)
-            else:result=flow.run(month,review=review,accounts=accounts)
+                with sync_playwright() as pw:
+                    if acquire_only:
+                        if not accounts or len(accounts)!=1:raise CredentialError('PDF取得する口座を1つ選んでください。')
+                        result=acquire_selected_pdf(base,accounts[0],pw,ensure_service,run_one,message=message,cancelled=cancel.is_set)
+                        events.put(('acquired',result));return
+                    if assets_only:
+                        flow=Workflow(base,progress=progress,cancelled=cancel.is_set)
+                        def asset_collect(account,stage):
+                            if cancel.is_set():raise Cancelled()
+                            session=ensure_service(base/'data',account,message)
+                            return run_one(pw,account,stage,gmail_session=session,progress=message,cancelled=cancel.is_set,documents=False,target_dates=flow.target_dates)
+                        result=flow.run(month,collect=asset_collect,review=review,accounts=accounts,include_saved_pdfs=False)
+                    else:result=collect_and_apply(base,month,pw,ensure_service,run_one,review,progress=progress,message=message,cancelled=cancel.is_set)
+            else:result=apply_saved(base,month,review,progress=progress,cancelled=cancel.is_set)
             events.put(('done',result))
         except Cancelled:events.put(('cancelled',None))
         except Exception as e:
@@ -95,27 +119,33 @@ def launch(app,base,online=False,accounts=None,assets_only=False):
                 summary,proposal,prepared=data
                 status.set('登録前の最終確認：以下を確認して「登録してExcel出力」を押してください。')
                 details.insert('end',f"追加売買 {summary['new_trades']}件／配当・分割等 {summary['new_cash_or_splits']}件／残高報告 {summary['balance_reports']}件\n登録済PDF {summary['known_pdf_files']}件／対象外 {summary['excluded_pdf_files']}件\n\n")
-                details.insert('end',f"資産取得を確認できた口座：{summary['assets_observed']}口座（指定日・項目の不足は完了時に表示）\n")
-                for p in proposal:details.insert('end',f"{p['account']}　{p['name']}　{p['state']}\n")
+                details.insert('end',f"現在資産の全項目を確認：{summary['assets_observed']}口座／保存済み取得証跡：{summary.get('recovered_asset_accounts',0)}口座\n")
+                warnings=summary.get('warnings',[])
+                if warnings:
+                    lines=warning_lines(warnings)
+                    for line in lines:remember(line)
+                    details.insert('end','\n【未解析・未取得の確認】\n'+'\n'.join(lines)+'\n\n')
+                for p in proposal:
+                    line=f"{p['account']}　{p['name']}　{p['state']}"
+                    remember(line);details.insert('end',line+'\n')
                 def accept():
                     choice[0]=True;decision.set();register.configure(state='disabled');preview.configure(state='disabled')
                 register=ttk.Button(actions,text='登録してExcel出力',command=accept);register.pack(side='left',padx=8)
                 preview=ttk.Button(actions,text='登録前Excelを確認',command=lambda:os.startfile(prepared));preview.pack(side='left',padx=8)
+            elif kind=='acquired':
+                try:write_diagnostics()
+                except OSError:pass
+                finish()
+                messagebox.showinfo('PDF取得完了・台帳には未反映',f"口座{data['account']}：新規保存 {data['saved']}件／保存済み {data['duplicate']}件。\n「取得済みPDFを全口座へ一括反映」でまとめて確認してください。")
+                return
             elif kind=='done':
                 try:write_diagnostics()
                 except OSError:pass
                 finish();warnings=data['warnings']
-                note='\n保存済み資料から更新しました（SBIへの接続なし）。' if 'SAVED_FILES_ONLY' in warnings else ''
-                assets=[x[-1] for x in warnings if x.startswith('ASSETS_NOT_OBSERVED_')]
-                if assets:note+='\n資産額未取得：'+','.join(assets)+'。必要な基準日の実額を手入力してください。'
-                labels={'domestic':'国内株式等','foreign':'外国株式（円評価）','cash':'円の現金合計','foreign_cash':'外貨現金（円評価）','growth_remaining':'NISA成長枠','tsumitate_remaining':'NISA積立枠','usd_cash':'米ドル現金（元通貨）'}
-                for warning in warnings:
-                    if warning.startswith('ASSET_FIELDS_MISSING:'):
-                        _,account,keys=warning.split(':',2)
-                        note+='\n口座'+account+'の未取得項目：'+'、'.join(labels.get(k,k) for k in keys.split(','))
-                missing=[x.split(':',1)[1] for x in warnings if x.startswith('ASSET_DATE_INCOMPLETE:')]
-                if missing:note+='\n指定日の資産に未取得項目あり：'+', '.join(missing)
-                messagebox.showinfo('更新完了',str(data['output'])+note);return
+                lines=warning_lines(warnings)
+                note='\n'+'\n'.join(lines[:10]) if lines else ''
+                if len(lines)>10:note+='\n残りの確認事項は今回の診断ファイルに記録しています。'
+                (messagebox.showwarning if warnings else messagebox.showinfo)('反映完了（確認事項あり）' if warnings else '資産の反映完了' if assets_only else '全口座の反映完了',str(data['output'])+note);return
             elif kind in ('error','cancelled'):
                 finish()
                 if kind=='error':

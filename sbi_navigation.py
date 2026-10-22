@@ -159,6 +159,7 @@ def open_post_resilient(page,context,progress=lambda _:None,cancelled=lambda:Fal
  except CredentialError as error:
   if cancelled():raise
   progress(str(error))
+  if manual_seconds<=0:raise
   progress('Edgeを閉じずに待機します（最大3分）。開いているEdgeで「取引報告書等（電子交付）」から国内株式・投資信託の報告書一覧を開いてください。表示を検出したら自動再開します。')
   try:page.bring_to_front()
   except Exception:pass

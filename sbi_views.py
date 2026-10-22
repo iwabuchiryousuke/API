@@ -5,6 +5,10 @@ from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
 from ledger import LedgerError
 from login_credentials import CredentialError
 
+class ObservationConflict(LedgerError):
+    """Two explicitly labelled displayed balances contradict each other."""
+    pass
+
 def _jst_now():
     # Windows Python installations may have no IANA timezone files. Japan has
     # no DST; a fixed UTC+09:00 fallback preserves date boundaries accurately.
@@ -86,7 +90,7 @@ def yen(text):
 
 def _assign(out,key,value,message):
     if value is None:return
-    if key in out and out[key]!=value:raise LedgerError(message)
+    if key in out and out[key]!=value:raise ObservationConflict(message)
     out[key]=value
 
 def _summary_rows(text,tables):
@@ -114,10 +118,35 @@ def parse_summary(text,tables=()):
         if value is None or not value.is_integer():continue
         key='growth_remaining' if m[2]=='成長投資枠' else 'tsumitate_remaining'
         _assign(out,key,{'year':int(m[1]),'remaining':int(value)},'NISA枠の表示が重複しています。')
+    # Responsive NISA views may put the investment frameworks in headers or
+    # rows. Read only the column explicitly labelled remaining/investable JPY;
+    # an annual maximum or used amount is not the remaining allowance.
+    body=norm(text)
+    years=set(int(value) for value in re.findall(r'(?:NISA)?投資可能枠\((\d{4})年\)',body))
+    if len(years)==1:
+        year=next(iter(years));frameworks={'成長投資枠':'growth_remaining','NISA(成長投資枠)':'growth_remaining','つみたて投資枠':'tsumitate_remaining','NISA(つみたて投資枠)':'tsumitate_remaining'}
+        remaining_headers={'投資可能額(円)','投資可能枠(円)','残り投資可能枠(円)','投資可能残額(円)'}
+        for table in tables:
+            columns={};amount_index=None
+            for row in table:
+                cells=[norm(cell) for cell in row]
+                header={index:frameworks[cell] for index,cell in enumerate(cells) if cell in frameworks}
+                indexes=[index for index,cell in enumerate(cells) if cell in remaining_headers]
+                if len(header)==2:columns=header;continue
+                if columns and cells and cells[0] in remaining_headers:
+                    for index,key in columns.items():
+                        value=yen(row[index]) if len(row)>index else None
+                        if value is not None and value.is_integer():_assign(out,key,{'year':year,'remaining':int(value)},'NISA枠の表示が重複しています。')
+                    continue
+                if len(indexes)==1:amount_index=indexes[0];continue
+                if amount_index is not None and len(row)>amount_index:
+                    keys=[frameworks[cell] for index,cell in enumerate(cells) if index!=amount_index and cell in frameworks]
+                    value=yen(row[amount_index])
+                    if len(keys)==1 and value is not None and value.is_integer():_assign(out,keys[0],{'year':year,'remaining':int(value)},'NISA枠の表示が重複しています。')
     if all(k in out for k in ('cash_total','broker_cash','bank')):
         from decimal import Decimal
         if Decimal(str(out['cash_total']))!=Decimal(str(out['broker_cash']))+Decimal(str(out['bank'])):
-            raise LedgerError('現金合計と証券口座・連携銀行の内訳が一致しません。')
+            raise ObservationConflict('現金合計と証券口座・連携銀行の内訳が一致しません。')
     if not out:raise LedgerError('口座サマリーの現金・NISA枠を確認できません。')
     return out
 
@@ -257,7 +286,26 @@ def include_cash(page):
         if visible and visible[0].is_checked():
             visible[0].uncheck(timeout=5000);page.wait_for_timeout(500)
 
-def capture_account(page,store,account,progress=lambda _:None,owner=None,cancelled=lambda:False,identity_verified=False,diagnostics=None):
+def reveal_asset_rows(page):
+    """Use rendered display controls to reveal zero balances, never infer zero."""
+    from auto_login import trusted
+    changed=False
+    for frame in frames(page):
+        if not trusted(frame):continue
+        for name in ('残高ゼロの項目を表示','残高0の項目を表示','残高のない商品を表示','残高ゼロを表示','残高0を表示'):
+            loc=frame.get_by_role('checkbox',name=name,exact=True)
+            matches=[loc.nth(index) for index in range(loc.count()) if loc.nth(index).is_visible()]
+            if len(matches)>1:raise CredentialError('残高表示の切替を一意に確認できません。')
+            if matches and not matches[0].is_checked():matches[0].check(timeout=5000);changed=True
+        for name in ('資産の内訳を表示','内訳をすべて表示','資産をすべて表示'):
+            loc=frame.get_by_role('button',name=name,exact=True)
+            matches=[loc.nth(index) for index in range(loc.count()) if loc.nth(index).is_visible() and loc.nth(index).get_attribute('aria-expanded')=='false']
+            if len(matches)>1:raise CredentialError('資産内訳の展開を一意に確認できません。')
+            if matches:matches[0].click(timeout=5000);changed=True
+    if changed:page.wait_for_timeout(400)
+
+
+def capture_account(page,store,account,progress=lambda _:None,owner=None,cancelled=lambda:False,identity_verified=False,diagnostics=None,target_dates=()):
     if account not in ('A','B','C','D'):raise LedgerError('自動資産取得はA～Dです。')
     _check_cancelled(cancelled)
     _check_asset_identity(page,owner,require_match=bool(owner) and not identity_verified)
@@ -284,6 +332,7 @@ def capture_account(page,store,account,progress=lambda _:None,owner=None,cancell
                     if not trusted(page):raise
                     page.goto('https://site.sbisec.co.jp/account/assets',wait_until='domcontentloaded')
                 include_cash(page)
+                reveal_asset_rows(page)
             parser=parse_summary if kind=='口座サマリー' else parse_my_assets if kind=='My資産' else parse_currency_summary
             for attempt in range(12):
                 _check_cancelled(cancelled);_check_asset_identity(page,owner)
@@ -302,22 +351,26 @@ def capture_account(page,store,account,progress=lambda _:None,owner=None,cancell
             progress(f'口座{account}：{kind}の表示値を取得しました（現在値）。')
             if kind=='My資産':
                 asset_text,asset_tables=text,tables
-                from asset_snapshots import capture_history,capture_page,capture_month_start
-                try:
-                    capture_history(store,account,tables)
-                    capture_month_start(store,account,text,tables)
-                    capture_page(store,account,text,tables)
-                except LedgerError:
-                    progress(f'口座{account}：過去の指定日資産は未取得です。現在値では代用しません。')
-                # Keep the optional monthly-baseline workflow. It only uses
-                # explicitly labelled monthly-difference columns, never the
-                # nearby top-level daily P/L or a present-day balance.
-                _check_cancelled(cancelled)
-                try:
-                    select_monthly_view(page)
-                    monthly_text,monthly_tables=snapshot_dom(page)
-                    capture_month_start(store,account,monthly_text,monthly_tables)
-                except (LedgerError,CredentialError):pass
+                # Target-date collection uses only displayed-date history.
+                # Monthly deltas are 1st 07:00 baselines and cannot establish
+                # the previous calendar month-end or the beginning of day 1.
+                if not target_dates:
+                    from asset_snapshots import capture_history,capture_page,capture_month_start
+                    try:
+                        capture_history(store,account,tables)
+                        capture_month_start(store,account,text,tables)
+                        capture_page(store,account,text,tables)
+                    except LedgerError:
+                        progress(f'口座{account}：過去の指定日資産は未取得です。現在値では代用しません。')
+                    # Keep the optional monthly-baseline workflow. It only uses
+                    # explicitly labelled monthly-difference columns, never the
+                    # nearby top-level daily P/L or a present-day balance.
+                    _check_cancelled(cancelled)
+                    try:
+                        select_monthly_view(page)
+                        monthly_text,monthly_tables=snapshot_dom(page)
+                        capture_month_start(store,account,monthly_text,monthly_tables)
+                    except (LedgerError,CredentialError):pass
         except CredentialError:
             # Identity mismatch and cancellation must never become a warning
             # followed by another page read or a saved snapshot.
@@ -343,10 +396,10 @@ def capture_account(page,store,account,progress=lambda _:None,owner=None,cancell
         save_observation(store,account,'My資産',asset_text,assets)
     current=_current_values(captured)
     if any(value is not None for value in current.values()):
-        from asset_snapshots import save,snapshots
+        from asset_snapshots import save,snapshots,exact_fields
         stamp=_jst_now().date().isoformat();old=snapshots(store).get((account,stamp))
-        if old and not old.get('source','').startswith('SBI'):
-            progress('同日の手動資産記録を保持しました。自動取得値は取得時点の表で確認できます。')
+        if old and (not old.get('source','').startswith('SBI') or exact_fields(old)):
+            progress('同日の手動・基準日確認済み資産記録を保持しました。現在値は取得時点の表で確認できます。')
         else:
             retained=False
             if old:
@@ -361,7 +414,8 @@ def capture_account(page,store,account,progress=lambda _:None,owner=None,cancell
     usd=captured.get('My資産',{}).get('usd_cash') is not None
     if not usd:missing.append('米ドル現金(原通貨)')
     if missing:progress(f'口座{account}：未取得項目＝'+ '、'.join(missing)+'。未確認の値は0にしません。')
-    return not missing
+    historical=capture_exact_dates(page,store,account,target_dates,progress,owner=owner,cancelled=cancelled) if target_dates else {}
+    return not missing and all(item['complete'] for item in historical.values())
 
 
 def select_monthly_view(page):
@@ -379,3 +433,199 @@ def select_monthly_view(page):
     # The 2026 My資産 view has separate 前日比/前月比 controls. Select the
     # requested monthly control directly; do not click the active daily tab.
     candidates[0].click(timeout=5000);page.wait_for_timeout(700)
+
+# History controls are discovered from the rendered read-only UI. No hidden SBI
+# endpoints or page-specific query parameters are invented here.
+_DATE_CONTROLS='input:not([type="password"]),select'
+_DATE_SCAN=r'''els=>els.map((el,index)=>{
+ const r=el.getBoundingClientRect();
+ return {index,tag:el.tagName.toLowerCase(),type:el.type||'',value:el.value||'',form:el.form?Array.from(document.forms).indexOf(el.form):null,
+ labels:[el.getAttribute('aria-label'),el.getAttribute('placeholder'),...(el.labels?Array.from(el.labels).map(x=>{const c=x.cloneNode(true);c.querySelectorAll('input,select,textarea').forEach(n=>n.remove());return c.textContent;}):[])].filter(Boolean),
+ visible:!!(r.width&&r.height&&getComputedStyle(el).visibility!=='hidden'),enabled:!el.disabled,
+ options:el.tagName==='SELECT'?Array.from(el.options).map(x=>({value:x.value,label:x.textContent,disabled:x.disabled})):[]};
+})'''
+_HISTORY_SCOPES=r'''els=>els.filter(e=>e.getClientRects().length).map(e=>({
+ text:e.innerText, label:[e.getAttribute('aria-label'),...Array.from(e.querySelectorAll(':scope > h1,:scope > h2,:scope > h3')).map(x=>x.innerText)].filter(Boolean).join(' '),
+ tables:Array.from(e.querySelectorAll('table')).filter(t=>t.getClientRects().length).map(t=>Array.from(t.rows).map(r=>Array.from(r.cells).map(c=>c.innerText))),
+ grids:Array.from(e.querySelectorAll('[role=table],[role=grid]')).filter(t=>t.getClientRects().length).map(t=>Array.from(t.querySelectorAll('[role=row]')).filter(r=>r.getClientRects().length).map(r=>Array.from(r.querySelectorAll('[role=columnheader],[role=rowheader],[role=cell],[role=gridcell]')).map(c=>c.innerText)))
+}))'''
+
+def _history_values(page,target):
+    from auto_login import trusted
+    from asset_snapshots import exact_table_values,exact_panel_values,displayed_asset_date,HistoricalConflict
+    def record(key,value):
+        if key in found and found[key]!=value:raise HistoricalConflict('指定日資産の表示領域どうしで数値が一致しません。')
+        found[key]=value
+    text,tables=snapshot_dom(page)
+    found=exact_table_values(tables,target)
+    scopes=[]
+    for frame in frames(page):
+        if not trusted(frame):continue
+        for scope in frame.locator('section,article,[role="tabpanel"],[role="region"]').evaluate_all(_HISTORY_SCOPES):
+            try:day=displayed_asset_date(scope['text'])
+            except LedgerError:continue
+            if day==target:scopes.append(scope)
+    # A containing section must not attach an unrelated present-day NISA panel
+    # to a smaller dated history panel merely because both share an ancestor.
+    leaf_scopes=[scope for scope in scopes if not any(other is not scope and len(other['text'])<len(scope['text']) and other['text'] in scope['text'] for other in scopes)]
+    for scope in leaf_scopes:
+        history_label=scope.get('label','')
+        allow_nisa=bool(re.search('指定日|履歴',history_label)) and not re.search('現在の?NISA|現在の投資可能|本日現在',scope['text'])
+        values=exact_panel_values(scope['text'],scope['tables']+scope['grids'],target,allow_nisa=allow_nisa)
+        for key,value in values.items():record(key,value)
+    if not leaf_scopes:
+        # A whole page may supply dated assets, but its year-only current NISA
+        # summary is never considered historical evidence.
+        try:values=exact_panel_values(text,tables,target,allow_nisa=False)
+        except HistoricalConflict:raise
+        except LedgerError:values={}
+        for key,value in values.items():record(key,value)
+    return found
+
+def _history_busy(page):
+    from auto_login import trusted
+    for frame in frames(page):
+        if not trusted(frame):continue
+        busy=frame.locator('[aria-busy="true"],[role="progressbar"]')
+        if any(busy.nth(index).is_visible() for index in range(busy.count())):return True
+    return False
+
+def _date_control_kind(row):
+    labels={norm(label).replace('を選択','').rstrip(':：') for label in row['labels']}
+    if labels&{'開始日','表示開始日','期間開始日','対象期間開始日'}:return 'start'
+    if labels&{'終了日','表示終了日','期間終了日','対象期間終了日'}:return 'end'
+    if labels&{'基準日','評価基準日','評価日','対象日','日付','指定日','表示日','対象年月日'} or row['type']=='date':return 'day'
+    if row['tag']=='select' and labels&{'年','対象年','表示年'}:return 'year'
+    if row['tag']=='select' and labels&{'月','対象月','表示月'}:return 'month'
+    if row['tag']=='select' and labels&{'日','対象日(号)','表示日(号)'}:return 'day_number'
+    return None
+
+def _set_history_date(page,target,cancelled=lambda:False):
+    text,_=snapshot_dom(page)
+    if not re.search('My資産|資産推移|資産履歴|資産残高履歴|残高履歴|指定日資産',text):
+        raise LedgerError('指定日を照会する資産画面であることを確認できません。')
+    from auto_login import trusted
+    from asset_snapshots import source_date
+    groups={key:[] for key in ('day','start','end','year','month','day_number')}
+    for frame in frames(page):
+        if not trusted(frame):continue
+        for row in frame.locator(_DATE_CONTROLS).evaluate_all(_DATE_SCAN):
+            if not row['visible'] or not row['enabled']:continue
+            kind=_date_control_kind(row)
+            # A select containing explicit date choices is itself observed proof
+            # of the available dates; numeric values alone are not dates.
+            if row['tag']=='select' and kind is None:
+                if any(re.fullmatch(r'\d{4}[/-]\d{1,2}[/-]\d{1,2}',str(option['value'])) for option in row['options']):kind='day'
+            if kind:groups[kind].append((frame,row))
+    selected=[]
+    if len(groups['start'])==len(groups['end'])==1 and not groups['day']:
+        selected=groups['start']+groups['end']
+    elif len(groups['day'])==1 and not groups['start'] and not groups['end']:
+        selected=groups['day']
+    elif all(len(groups[key])==1 for key in ('year','month','day_number')) and not groups['day']:
+        selected=groups['year']+groups['month']+groups['day_number']
+    else:raise LedgerError('指定日資産の表示日コントロールを一意に確認できません。')
+    if len({id(frame) for frame,_ in selected})>1 or len({row.get('form') for _,row in selected if row.get('form') is not None})>1:
+        raise LedgerError('指定日の入力欄が別の照会領域に分かれています。')
+    elements=[]
+    for frame,row in selected:
+        _check_cancelled(cancelled)
+        element=frame.locator(_DATE_CONTROLS).nth(row['index']);elements.append(element)
+        if row['tag']=='select':
+            choices=[];kind=_date_control_kind(row)
+            for option in row['options']:
+                if option['disabled']:continue
+                if kind in ('year','month','day_number'):
+                    index={'year':0,'month':1,'day_number':2}[kind]
+                    expected=int(target.split('-')[index]);label=norm(option['label']).rstrip('年月日')
+                    if label.isdigit() and int(label)==expected:choices.append(option['value'])
+                else:
+                    for candidate in (option['label'],option['value']):
+                        try:match=source_date(candidate)==target
+                        except LedgerError:match=False
+                        if match:choices.append(option['value']);break
+            if len(choices)!=1:raise LedgerError('指定日の選択肢を一意に確認できません。')
+            element.select_option(value=choices[0],timeout=5000)
+        else:
+            if row['type']=='date':value=target
+            elif '/' in row['value'] or any('/' in label for label in row['labels']):value=target.replace('-','/')
+            elif re.fullmatch(r'\d{4}-\d{1,2}-\d{1,2}',row['value']):value=target
+            else:raise LedgerError('指定日入力欄の日付書式を確認できません。')
+            element.fill(value,timeout=5000);element.press('Tab',timeout=5000)
+    # Only observed query controls in the date field's own form/region. Never
+    # click account changes, trades, or an unrelated update button elsewhere.
+    scopes=[]
+    for element in elements:
+        scope=element.locator('xpath=ancestor::form[1]')
+        if scope.count()!=1:scope=element.locator('xpath=ancestor::*[self::section or self::article or @role="region" or @role="tabpanel"][1]')
+        if scope.count()==1:scopes.append(scope)
+    buttons=[]
+    if scopes:
+        scope=scopes[0]
+        for name in ('表示','照会','検索','適用'):
+            loc=scope.get_by_role('button',name=name,exact=True)
+            buttons.extend(loc.nth(index) for index in range(loc.count()) if loc.nth(index).is_visible() and loc.nth(index).is_enabled())
+    if len(buttons)>1:raise LedgerError('指定日照会ボタンを一意に確認できません。')
+    if buttons:
+        _check_cancelled(cancelled);buttons[0].click(timeout=5000)
+    return True
+
+def capture_exact_dates(page,store,account,target_dates,progress=lambda _:None,owner=None,cancelled=lambda:False,timeout=12):
+    """Best-effort read-only exact-date navigation; missing data stays missing."""
+    from asset_snapshots import parse_date,merge_exact,historical_status,HistoricalConflict
+    from auto_login import trusted
+    targets=tuple(dict.fromkeys(parse_date(day) for day in target_dates))
+    if not targets:return {}
+    _check_cancelled(cancelled);_check_asset_identity(page,owner)
+    # Current tables might already contain explicitly dated history rows.
+    for target in targets:
+        _check_cancelled(cancelled)
+        try:
+            values={} if _history_busy(page) else _history_values(page,target)
+            if values:merge_exact(store,account,target,values,observed_at=_jst_now().isoformat())
+        except HistoricalConflict:raise
+        except LedgerError:
+            progress(f'口座{account}：{target}の表示値が一意でないため既存値を保持しました。')
+    status=historical_status(store,account,targets)
+    pending=[target for target in targets if not status[target]['complete']]
+    if pending:
+        ready=False
+        try:
+            text,_=snapshot_dom(page)
+            ready=bool(re.search('My資産|資産推移|資産履歴|資産残高履歴|残高履歴|指定日資産',text)) and any(row['visible'] and row['enabled'] and _date_control_kind(row) for frame in frames(page) if trusted(frame) for row in frame.locator(_DATE_CONTROLS).evaluate_all(_DATE_SCAN))
+        except Exception:pass
+        if not ready:
+            try:
+                page=navigate(page,['My資産','My資産トップ'],timeout=5,cancelled=cancelled)
+            except CredentialError:_check_cancelled(cancelled)
+            try:
+                page=navigate(page,['資産推移','資産履歴','資産残高履歴','残高履歴'],timeout=5,cancelled=cancelled)
+            except CredentialError:_check_cancelled(cancelled)
+    for target in pending:
+        _check_cancelled(cancelled);_check_asset_identity(page,owner)
+        try:
+            values={} if _history_busy(page) else _history_values(page,target)
+            if values:merge_exact(store,account,target,values,observed_at=_jst_now().isoformat())
+            if historical_status(store,account,(target,))[target]['complete']:continue
+            _set_history_date(page,target,cancelled=cancelled)
+            deadline=time.monotonic()+timeout;last=None;stable_since=None;best={}
+            while time.monotonic()<deadline:
+                _check_cancelled(cancelled);_check_asset_identity(page,owner)
+                if _history_busy(page):last=None;stable_since=None;page.wait_for_timeout(250);continue
+                values=_history_values(page,target)
+                signature=json.dumps(values,sort_keys=True)
+                if values and signature==last:
+                    if time.monotonic()-stable_since>=1:
+                        best=values;break
+                else:last=signature;stable_since=time.monotonic()
+                page.wait_for_timeout(300)
+            if best:
+                _check_cancelled(cancelled)
+                merge_exact(store,account,target,best,observed_at=_jst_now().isoformat())
+        except (CredentialError,HistoricalConflict):raise
+        except LedgerError:
+            progress(f'口座{account}：{target}の指定日表示を確認できません。現在値では補いません。')
+        status=historical_status(store,account,(target,))[target]
+        missing=[FIELD_LABELS[key] for key in status['missing']]
+        progress(f'口座{account}：{target} '+('指定日資産・NISAを確認しました。' if not missing else '未取得＝'+'、'.join(missing)+'。'))
+    return historical_status(store,account,targets)

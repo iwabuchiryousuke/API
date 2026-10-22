@@ -54,6 +54,7 @@ class Summary:
     new_cash_or_splits:int=0
     balance_reports:int=0
     assets_observed:int=0
+    recovered_asset_accounts:int=0
 
 class Workflow:
     def __init__(self,base,progress=None,cancelled=None):
@@ -90,6 +91,8 @@ class Workflow:
             self.emit('FAILED',error_code='UNEXPECTED')
             raise UpdateError('UNEXPECTED','更新処理を停止しました。台帳は更新前の状態です。空き容量・入力ファイル・設定を確認してください。') from None
     def _run(self,month,collect,review,include_father,accounts=None,include_saved_pdfs=True):
+        from acquisition_targets import target_dates
+        self.target_dates=target_dates(month)
         selected=tuple(accounts) if accounts is not None else tuple("ABCDE" if include_father else "ABCD")
         if not selected or len(set(selected))!=len(selected) or any(a not in "ABCDE" for a in selected):raise LedgerError("対象口座が不正です。")
         live=Store(self.base/'data');stage=None
@@ -106,6 +109,11 @@ class Workflow:
                 for filename in ('security_names.json',):
                     if (live.directory/filename).exists():shutil.copy2(live.directory/filename,stage.directory/filename)
                 summary=Summary();proposal=[];sources=[]
+                from acquisition_journal import replay_captures
+                replayed=replay_captures(self.base,stage,accounts=selected)
+                summary.recovered_asset_accounts=len(replayed['accounts'])
+                self.state['warnings'].extend(replayed['warnings'])
+                proposal.extend(replayed['proposal'])
                 if collect:
                     collection_errors=[]
                     for account in (a for a in selected if a!='E'):
@@ -121,14 +129,6 @@ class Workflow:
                         else:self.state['warnings'].append(f'ASSETS_NOT_OBSERVED_{account}')
                         missing=result.get('assets_missing',[])
                         if missing:self.state['warnings'].append(f'ASSET_FIELDS_MISSING:{account}:'+','.join(missing))
-                        from asset_snapshots import snapshots,KEYS
-                        from report_model import cutoff
-                        from datetime import date,timedelta
-                        first=date.fromisoformat(cutoff(month)).replace(day=1)
-                        stored=snapshots(stage)
-                        for target in ((first-timedelta(days=1)).isoformat(),first.isoformat()):
-                            if any(stored.get((account,target),{}).get(k) is None for k in KEYS):
-                                self.state['warnings'].append(f'ASSET_DATE_INCOMPLETE:{account}:{target}')
                     if collection_errors:raise UpdateError('COLLECTION_INCOMPLETE','収集を完了できなかった口座があります。保存済みPDFは保持しています。\n'+'\n'.join(collection_errors))
                 else:self.state['warnings'].append('SAVED_FILES_ONLY')
                 for account in (selected if include_saved_pdfs else ()):
@@ -145,6 +145,9 @@ class Workflow:
                             if message.startswith(('対象外：','解析済み：徴収・還付額0円')):
                                 summary.excluded_pdf_files+=1
                                 proposal.append({'account':account,'name':path.name,'kind':'対象外','new':0,'existing':0,'state':message})
+                                if '未解析' in message or any(word in message for word in ('外国株式','外国債券')):
+                                    warning=f'PDF_NOT_PARSED:{account}:{path.name}'
+                                    if warning not in self.state['warnings']:self.state['warnings'].append(warning)
                                 continue
                             raise UpdateError('UNSUPPORTED_PDF',f'口座{account}：{path.name}\n{message}\n未確認の書類を黙って除外せず、今回の一括登録を停止しました。') from None
                         if doc.digest!=digest:raise UpdateError('SOURCE_CHANGED','検査中にPDFが変更されました。もう一度実行してください。')
@@ -153,12 +156,20 @@ class Workflow:
                         proposal.append({'account':account,'name':path.name,'kind':kind,'new':added,'existing':existing,'state':'名義・整合性確認済み'})
                 after=(len(stage.records()),len(activities.events()),len(activities.balances()))
                 summary.new_trades=after[0]-before[0];summary.new_cash_or_splits=after[1]-before[1];summary.balance_reports=after[2]-before[2]
+                from asset_snapshots import historical_status
+                for account in (a for a in selected if a!='E'):
+                    history=historical_status(stage,account,self.target_dates)
+                    for target,status in history.items():
+                        if not status['complete']:
+                            self.state['warnings'].append(f'ASSET_DATE_INCOMPLETE:{account}:{target}')
                 self.emit('PREPARING_EXCEL',summary=asdict(summary));self.check_cancel()
+                summary_data=asdict(summary)
+                summary_data['warnings']=list(self.state['warnings'])
                 # Build with production exporter before committing anything.
                 prepared=export_trades(stage,self.job/'prepared',month,activities)
                 # Reference research is public, and must be the user's current copy.
                 # Staging copies this in run preparation below, never private files.
-                if review is None or not review(asdict(summary),proposal,prepared):raise Cancelled()
+                if review is None or not review(summary_data,proposal,prepared):raise Cancelled()
                 self.check_cancel();self.emit('COMMITTING')
                 for path,digest in sources:
                     if not path.is_file() or source_digest(path)!=digest:raise UpdateError('SOURCE_CHANGED','確認後に入力ファイルが変更されました。登録していません。')
