@@ -1,18 +1,18 @@
 {
-  "version": "3.5.14",
-  "baseline_commit": "26d9cc659c546a6a69d33fd2df703c38ca90c226",
-  "tests": 492,
+  "version": "3.5.15",
+  "baseline_commit": "a47891e7dbcad383e832924b55bd478575177889",
+  "tests": 685,
   "failures": 0,
   "errors": 0,
   "skipped": 0,
   "expected_failures": 0,
   "unexpected_successes": 0,
-  "seconds": 75.862,
+  "seconds": 132.984,
   "successful": true,
-  "test_source": "isolated extraction of code release ZIP; subsequent documentation-only result update",
-  "offline_browser_tests": 40,
+  "test_source": "isolated extraction of code release ZIP; subsequent result-documentation update and test trailing blank-line normalization only",
+  "offline_browser_tests": 55,
   "packaged_tests": {
-    "tests": 492,
+    "tests": 685,
     "failures": 0,
     "errors": 0,
     "skipped": 0
@@ -33,28 +33,66 @@
     "original_data_ooxml_entries_identical": 8,
     "golden_standard_entries": 8,
     "golden_management_entries": 13,
-    "layout_or_formulas_changed": false,
-    "legacy_estimate_note_disclaimer_added": true
+    "layout_or_formulas_changed": false
   },
-  "asset_history": {
+  "monthly_automation": {
+    "timezone": "Asia/Tokyo",
+    "calendar_days": [
+      "last day of month",
+      "first day of month"
+    ],
+    "scheduled_time": "16:00",
+    "accounts": [
+      "A",
+      "B",
+      "C",
+      "D"
+    ],
+    "all_assets_before_pdfs": true,
+    "day_one_pdfs_saved": true,
+    "automatic_trade_commit": false,
+    "headless": true,
+    "new_runtime_dependencies": false,
+    "test_mode_consumes_production_slots": false,
+    "separate_comparison_csv": true,
+    "actual_observation_times_retained": true,
+    "exact_16_valuation_claimed": false,
+    "missing_components_treated_as_zero": false,
     "unobserved_past_dates_reconstructed": false,
-    "monthly_difference_derivation_retired": true,
-    "intraday_reference_explicitly_labelled": true,
-    "background_scheduling_added": false,
-    "unobserved_components_treated_as_zero": false
+    "full_data_backup_before_first_unattended_start": true,
+    "completed_assets_and_pdfs_reused_on_retry": true,
+    "known_manual_auth_failures_held_until_explicit_test_success": true,
+    "metadata_integrity_failures_stop_before_auth": true,
+    "pc_power_off_supported": false,
+    "default_logon_mode": "InteractiveToken",
+    "optional_logon_mode": "Password",
+    "s4u_used": false,
+    "wake_to_run_requested": true,
+    "wake_to_run_verified_on_windows": false
   },
   "release_upgrade": {
-    "from_version": "3.5.13",
-    "to_version": "3.5.14",
-    "changed_files": 41,
+    "from_version": "3.5.14",
+    "to_version": "3.5.15",
+    "changed_files": 39,
     "manifest_verified": true,
-    "protected_fixture_hashes_unchanged": true,
     "repeat_no_changes": true,
     "backup_manifest_present": true,
-    "requirements_changed": false
+    "requirements_changed": false,
+    "protected_fixture_hashes_unchanged": true,
+    "protected_fixture_files": 15
   },
   "live_sbi_tested": false,
+  "live_gmail_tested": false,
   "windows_tested": false,
-  "code_zip_sha256": "5bbff6c8e299e17bda43bc96530dfb8b64a0877d220cdbb244a0d2d3d037e931",
-  "runtime_and_tests_match_verified_package": true
+  "code_zip_sha256": "47f5ed0a325530045b88066e1bfacf6539012ca819c9a8a5fb8b770cf3114592",
+  "code_zip_bytes": 424797,
+  "code_zip_entries": 144,
+  "manifest_verified": true,
+  "private_payloads_in_code_zip": 0,
+  "runtime_matches_verified_package": true,
+  "test_ast_matches_verified_package": true,
+  "post_test_changes": [
+    "test_monthly_runner_safety.py",
+    "検証結果_v3.5.15.md"
+  ]
 }

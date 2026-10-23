@@ -7,7 +7,10 @@ from urllib.parse import urlparse
 from ledger import Store
 from gmail_auth import service,wait_code,recent_ids,wait_message,extract_auth_link
 from epost_collector import BASE,autofill_login,_login_page,wait_for_post_tab,collect
-from login_credentials import CredentialError
+from login_credentials import CredentialError,AuthenticationRequired
+
+class IdentityUnavailable(CredentialError):
+    """A trusted login exists but its owner name is not rendered here."""
 
 def trusted(page):
     host=(urlparse(page.url).hostname or '').lower()
@@ -151,19 +154,20 @@ def authenticated_page(context,owner,timeout=30,cancelled=lambda:False):
                 try:body=f.locator('body').inner_text(timeout=1500)
                 except Exception:continue
                 identity=state(body,owner)
-                if identity=='MISMATCH':raise CredentialError('選択口座と異なるログイン名義を検出したため停止しました。')
+                if identity=='MISMATCH':raise AuthenticationRequired('選択口座と異なるログイン名義を検出したため停止しました。')
                 if identity=='MATCH' and 'ログアウト' in body:return p
         time.sleep(.5)
-    raise CredentialError('ログイン後の口座名義を確認できません。別口座への保存を防ぐため停止しました。')
+    raise IdentityUnavailable('ログイン後の口座名義を確認できません。別口座への保存を防ぐため停止しました。')
 
 def open_electronic_post(page,context,progress=lambda _:None,cancelled=lambda:False,manual_seconds=180):
     from sbi_navigation import open_post_resilient
     return open_post_resilient(page,context,progress=progress,cancelled=cancelled,manual_seconds=manual_seconds)
 
-def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lambda message:None,cancelled=lambda:False,documents=True,capture_assets=True,target_dates=()):
+def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lambda message:None,cancelled=lambda:False,documents=True,capture_assets=True,target_dates=(),headless=False,summary_only=False):
     assets_observed=False
     if account not in tuple('ABCD'):raise CredentialError('SBIの自動取得は口座A～Dです。')
     if not documents and not capture_assets:raise CredentialError('取得する内容が選択されていません。')
+    if summary_only and (documents or not capture_assets):raise CredentialError('口座サマリー専用取得ではPDF取得を同時に指定できません。')
     if cancelled():raise CredentialError('中止しました。')
     api,recipient=gmail_session or service(BASE/'data',account)
     store=asset_store or Store(BASE/'data')
@@ -173,7 +177,7 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
     if not owner:raise CredentialError('最初に各口座のPDF名義を設定してください。')
     stage='Edgeの起動'
     progress(f'口座{account}：{stage}')
-    try:browser=playwright.chromium.launch(channel='msedge',headless=False)
+    try:browser=playwright.chromium.launch(channel='msedge',headless=headless)
     except Exception:raise CredentialError(f'口座{account}：Edgeを起動できません。Edgeとsetup_all_windows.batの実行を確認してください。') from None
     try:
         context=browser.new_context(accept_downloads=True);page=context.new_page();page.goto('https://www.sbisec.co.jp/',wait_until='domcontentloaded')
@@ -195,10 +199,13 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
                 except Exception:continue
                 if visible(p,'button',['Eメールを送信する']) and 'デバイス認証' in body:
                     device_auth(p,context,api,recipient,progress=progress,cancelled=cancelled);page=p;device_done=True;break
-                if any(x in body for x in ('ロボットでは','CAPTCHA','アクセスが制限')):raise CredentialError('追加確認・アクセス制限があります。自動処理を停止しました。')
+                if any(x in body for x in ('ロボットでは','CAPTCHA','アクセスが制限')):raise AuthenticationRequired('追加確認・アクセス制限があります。自動処理を停止しました。')
                 fields=otp_fields(p)
                 if fields:page=p;otp=fields;break
                 if re.sub(r'\s+','',owner) in re.sub(r'\s+','',body) and 'ログアウト' in body:page=p;logged_in=True;break
+                # This grants navigation only. Collection still requires the
+                # explicit SBI owner or independently verified e-post owner.
+                if 'ログアウト' in body and ('口座管理' in body or 'My資産' in body):page=p;logged_in=True;break
             if otp or device_done or logged_in:break
             (page.page if hasattr(page,'page') else page).wait_for_timeout(500)
         if not (otp or device_done or logged_in):raise CredentialError('ログイン後の画面を認識できません。認証画面・エラー表示のスクリーンショットで確認が必要です。')
@@ -215,17 +222,26 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
         stage='ログイン完了・名義確認';progress(f'口座{account}：{stage}')
         from sbi_views import landing,verify_post_owner,capture_account,select_asset_page
         page=landing(context,cancelled=cancelled)
-        if not documents:page=authenticated_page(context,owner,cancelled=cancelled)
         # A post navigation may replace this very Page. Keep its observed SBI
         # entry only in memory so we can return within the same login context.
         asset_entry_url=page.url if trusted(page) else None
+        if not documents:
+            try:page=authenticated_page(context,owner,timeout=5 if summary_only else 30,cancelled=cancelled)
+            except IdentityUnavailable:
+                if not summary_only:raise
+                # Some legacy summary pages omit the name. Verify the owner at
+                # e-post without downloading anything, then return to SBI.
+                progress(f'口座{account}：電子ポストの名義を確認してからサマリーへ戻ります。')
+                post=open_electronic_post(page,context,progress=progress,cancelled=cancelled,manual_seconds=0)
+                verify_post_owner(post,owner,progress=progress,cancelled=cancelled)
+                page=select_asset_page(page,owner=owner,identity_verified=True,entry_url=asset_entry_url,progress=progress,cancelled=cancelled)
         if cancelled():raise CredentialError('中止しました。')
         saved=duplicate=failed=0
         pdf_error=None
         if documents:
             stage='電子ポストへ移動・名義確認';progress(f'口座{account}：{stage}')
             try:
-                post=open_electronic_post(page,context,progress=progress,cancelled=cancelled,manual_seconds=0 if capture_assets else 180)
+                post=open_electronic_post(page,context,progress=progress,cancelled=cancelled,manual_seconds=0 if capture_assets or headless else 180)
             except CredentialError:
                 if cancelled() or not capture_assets:raise
                 # No PDF owner check succeeded. Asset fallback therefore needs
@@ -249,7 +265,7 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             if pdf_error:raise CredentialError(pdf_error+' 保存済みPDFは保持しています。台帳への反映は行っていません。')
             return {'complete':True,'pdf_collected':documents,'assets_observed':False,'saved':saved,'duplicate':duplicate}
         # Preserve PDFs before navigating unrelated asset pages.
-        stage='口座サマリー・My資産の取得';progress(f'口座{account}：{stage}')
+        stage='口座サマリーの取得' if summary_only else '口座サマリー・My資産の取得';progress(f'口座{account}：{stage}')
         store=asset_store or Store(BASE/'data')
         from asset_snapshots import KEYS,HistoricalConflict
         status={'available':[],'missing':list(KEYS)+['growth_remaining','tsumitate_remaining'],'usd_cash_observed':False}
@@ -257,11 +273,18 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
         from acquisition_journal import persist_capture,JournalError
         capture_started=_jst_now().isoformat()
         journal_saved=False
+        monthly_summary=None
         try:
             page=select_asset_page(page,owner=owner,identity_verified=True,entry_url=asset_entry_url,progress=progress,cancelled=cancelled)
-            assets_observed=capture_account(page,store,account,progress,owner=owner,cancelled=cancelled,identity_verified=True,diagnostics=BASE/'data'/'diagnostics',target_dates=target_dates)
-            from sbi_views import capture_status
-            status=capture_status(store,account,since=capture_started)
+            if summary_only:
+                from monthly_summary import capture_summary
+                monthly_summary=capture_summary(page,store,account,owner=owner,identity_verified=True,progress=progress,cancelled=cancelled)
+                status={'complete':monthly_summary['complete'],'available':[key for key in ('summary_stocks','cash_total') if monthly_summary['values'].get(key) is not None],
+                        'missing':monthly_summary['missing'],'usd_cash_observed':False}
+            else:
+                assets_observed=capture_account(page,store,account,progress,owner=owner,cancelled=cancelled,identity_verified=True,diagnostics=BASE/'data'/'diagnostics',target_dates=target_dates)
+                from sbi_views import capture_status
+                status=capture_status(store,account,since=capture_started)
             # Current coverage and exact-date coverage are reported separately.
             # A missing historical field must not mislabel verified current data.
             assets_observed=status.get('complete',assets_observed)
@@ -279,6 +302,7 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             raise CredentialError('指定日の資産表示と確認済み記録が一致しません。既存値を保持し、今回の一括反映を停止しました。診断とSBIの表示基準日を確認してください。') from None
         except Exception:
             if cancelled():raise CredentialError('中止しました。')
+            if summary_only:raise CredentialError('口座サマリーの安定した株式評価額・現金残高を確認できませんでした。自動集計の診断を確認してください。') from None
             assets_observed=False
             progress(f'口座{account}：資産額は未取得です。保存済みPDFの取り込みは続行します。')
         finally:
@@ -290,9 +314,9 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             raise CredentialError(pdf_error+' '+retained+'台帳への一括反映は未完了です。')
         if not documents and not status['available']:raise CredentialError('資産情報を確認できませんでした。資産画面の診断を確認してください。')
         missing=list(status['missing'])
-        if not status['usd_cash_observed']:missing.append('usd_cash')
+        if not summary_only and not status['usd_cash_observed']:missing.append('usd_cash')
         return {'complete':True,'assets_observed':assets_observed,'assets_missing':missing,
-                'usd_cash_observed':status['usd_cash_observed'],'pdf_collected':documents,'saved':saved,'duplicate':duplicate}
+                'usd_cash_observed':status['usd_cash_observed'],'pdf_collected':documents,'saved':saved,'duplicate':duplicate,'monthly_summary':monthly_summary}
     except CredentialError as e:
         if 'post' in locals():
             from post_identity import save_failure_evidence
@@ -301,7 +325,8 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             from navigation_diagnostics import save_navigation_failure
             try:save_navigation_failure(context,BASE/'data'/'diagnostics',account,stage,progress)
             except Exception:progress('画面移動の診断は保存できませんでした。')
-        raise CredentialError(f'口座{account}／{stage}：{e}') from None
+        error_type=AuthenticationRequired if isinstance(e,AuthenticationRequired) else CredentialError
+        raise error_type(f'口座{account}／{stage}：{e}') from None
     except Exception:raise CredentialError(f'口座{account}／{stage}で停止しました。画面の読み込み・追加認証・接続状況を確認してください。') from None
     finally:browser.close()
 

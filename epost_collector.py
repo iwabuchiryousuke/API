@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from login_credentials import CredentialError, load_credentials
+from login_credentials import CredentialError, AuthenticationRequired, load_credentials
 
 
 BASE = Path(__file__).resolve().parent
@@ -235,9 +235,11 @@ def autofill_login(page, context, account, automatic=False):
     try:
         credentials = load_credentials(BASE / 'data', account)
     except CredentialError as error:
+        if automatic and isinstance(error,AuthenticationRequired):raise
         print('ログイン情報を自動入力できません:', error)
         return False
     if credentials is None:
+        if automatic:raise AuthenticationRequired('保存済みログイン情報がありません。このPC・Windowsユーザーで設定してください。')
         print('ログイン情報は未設定です。今回は手動で入力してください。')
         return False
     deadline = time.monotonic() + 45

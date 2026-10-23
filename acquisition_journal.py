@@ -27,7 +27,7 @@ class JournalError(LedgerError):
 _JST=timezone(timedelta(hours=9))
 _KINDS={'口座サマリー','My資産','口座(外貨建)'}
 _FIELDS=KEYS+('growth_remaining','tsumitate_remaining')
-_AMOUNTS=set(KEYS)|{'bank','fund','bond','usd_fund','usd_bond','usd_cash','cash_total','broker_cash'}
+_AMOUNTS=set(KEYS)|{'bank','fund','bond','usd_fund','usd_bond','usd_cash','cash_total','broker_cash','summary_stocks','summary_total'}
 _SOURCES={'SBI My資産','SBI My資産履歴','SBI My資産の前月比','SBI取得当日','SBI 指定日資産'}
 _TOP={'schema','version','account','owner','acquired_at','since','target_dates','observations','snapshots','sha256'}
 _MAX_BYTES=4*1024*1024

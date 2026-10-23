@@ -18,6 +18,12 @@ class CredentialError(ValueError):
     pass
 
 
+class AuthenticationRequired(CredentialError):
+    """A known credential/manual-auth state that retrying cannot resolve."""
+    code = 'MANUAL_AUTH_REQUIRED'
+    retryable = False
+
+
 _ENTROPY = b'SBI-family-manager-login-v1'
 _MAGIC = b'SBI-DPAPI-1\n'
 
@@ -109,22 +115,27 @@ def save_credentials(data_directory, account, username, password):
 
 
 def load_credentials(data_directory, account):
+    """Return optional saved credentials; unusable local content needs setup."""
     target = credential_path(data_directory, account)
-    if not target.exists():
-        return None
     try:
         raw = target.read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        # A temporary read/locking failure does not prove broken credentials.
+        raise CredentialError('保存済みログイン情報を読み取れません。保存先のアクセス状態を確認してください。') from error
+    try:
         if not raw.startswith(_MAGIC):
             raise ValueError
         payload = _dpapi(base64.b64decode(raw[len(_MAGIC):], validate=True), protect=False)
         value = json.loads(payload.decode('utf-8'))
-        if value.get('version') != 1 or not value.get('username') or not value.get('password'):
+        if (not isinstance(value,dict) or type(value.get('version')) is not int or value['version'] != 1
+                or not isinstance(value.get('username'),str) or not 1<=len(value['username'].strip())<=100
+                or not isinstance(value.get('password'),str) or not 1<=len(value['password'])<=256):
             raise ValueError
         return value['username'], value['password']
-    except CredentialError:
-        raise
     except Exception as error:
-        raise CredentialError(
+        raise AuthenticationRequired(
             '保存済みログイン情報を開けません。このPC・Windowsユーザーで設定し直してください。'
         ) from error
 

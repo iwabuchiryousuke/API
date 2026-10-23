@@ -20,7 +20,7 @@ _JOURNAL_WARNING=('未反映の取得証跡を確認できないため、登録�
 _RECORD_WARNING=('取得時刻・日付・保存内容を確認できない資産記録があります。'
                  '確認できる記録だけを表示し、不明な時刻を現在の取得とは扱いません。')
 _AMOUNTS={'domestic','foreign','cash','foreign_cash','bank','fund','bond',
-          'usd_fund','usd_bond','usd_cash','cash_total','broker_cash'}
+          'usd_fund','usd_bond','usd_cash','cash_total','broker_cash','summary_stocks','summary_total'}
 
 
 def _warn(warnings,message):

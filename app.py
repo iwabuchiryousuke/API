@@ -38,7 +38,7 @@ class App:
         for label,fn in [('選択口座のPDFだけ取得',self.collect_epost),('保存したPDFのフォルダを開く',self.open_collected_pdfs),('PDF取得結果一覧',self.open_collection_audit),('配当・税還・利息を手動追加',self.add_cash_entry),('分割を登録',self.add_split)]:
             b=ttk.Button(epost,text=label,command=fn);b.pack(side='left',padx=4);self.buttons.append(b)
         extra=ttk.Frame(outer);extra.pack(fill='x',pady=(8,0))
-        for label,fn in [('4口座のPDF・資産・NISAを取得して一括反映',self.auto_collect),('取得した資産を確認',self.show_assets)]:
+        for label,fn in [('4口座のPDF・資産・NISAを取得して一括反映',self.auto_collect),('取得した資産を確認',self.show_assets),('月末・1日の自動集計',self.show_monthly)]:
             b=ttk.Button(extra,text=label,command=fn);b.pack(side='left',padx=4);self.buttons.append(b)
         settings=ttk.Menubutton(extra,text='口座・認証の設定')
         menu=tk.Menu(settings,tearoff=False)
@@ -68,6 +68,11 @@ class App:
         root.protocol('WM_DELETE_WINDOW',self.close);self.refresh()
         from initial_setup import ensure_personal
         root.after(150,lambda:ensure_personal(BASE,root))
+
+    def show_monthly(self):
+        if self.busy:return
+        from monthly_dialog import show
+        show(self,BASE)
 
     def check_gmail(self):
         import subprocess,sys

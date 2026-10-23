@@ -3,7 +3,7 @@ import re,time,unicodedata
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
-from login_credentials import CredentialError
+from login_credentials import CredentialError,AuthenticationRequired
 
 def compact(value):
     return ''.join(c for c in unicodedata.normalize('NFKC',str(value)) if not c.isspace() and unicodedata.category(c)!='Cf')
@@ -43,7 +43,7 @@ def verify(page,owner,timeout=30,progress=lambda message:None,clock=time.monoton
             last=current
         if current=='MATCH':return
         if current=='MISMATCH':
-            raise CredentialError('電子ポストに選択口座以外の家族名義を検出しました。ログイン口座と選択口座を確認してください。保存していません。')
+            raise AuthenticationRequired('電子ポストに選択口座以外の家族名義を検出しました。ログイン口座と選択口座を確認してください。保存していません。')
         if clock()>=deadline:
             progress(f'名義表示待ち終了 / 試行={attempt} / 対象文書={counts["frames"]} / 読取成功={counts["read"]} / 文字数={counts["chars"]}')
             raise CredentialError('電子ポストの名義表示を待ちましたが確認できません。別名義とは断定していません。診断用画像で画面を確認してください。保存していません。')
