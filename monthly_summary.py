@@ -282,7 +282,10 @@ def capture_summary(page,store,account,owner=None,identity_verified=False,progre
         if not any(_text_sections(text) or _table_sections(tables) for text,tables in chunks):
             try:page=navigate(page,['口座(円建)','口座サマリー'],timeout=5,cancelled=cancelled)
             except CredentialError:_check_cancelled(cancelled)
-    text,values=_read_stable(page,owner,cancelled)
+    try:text,values=_read_stable(page,owner,cancelled)
+    except ObservationConflict:
+        from auto_login import AcquisitionError
+        raise AcquisitionError('SUMMARY_VALUES_CONFLICT','口座サマリーの株式・現金・合計の表示が整合しません。更新後の表示を確認してください。') from None
     _check_cancelled(cancelled);_check_asset_identity(page,owner)
     payload=save_observation(store,account,'口座サマリー',_page_clock(text) or '',values) if values else {'observed_at':_jst_now().isoformat(),'displayed_at':None}
     missing=[key for key in REQUIRED if values.get(key) is None]

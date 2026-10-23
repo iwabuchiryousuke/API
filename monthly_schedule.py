@@ -47,6 +47,53 @@ def due_slot(now,role='auto',allow_early=False):
             'include_pdfs':actual=='month-start'}
 
 
+def due_configured_schedule(schedule,now,expected_revision=None):
+    """Gate one configured occurrence; stale, deleted and missed days do no work."""
+    from schedule_settings import _entry
+    item=_entry(schedule);current=_aware(now)
+    if expected_revision is not None:
+        if type(expected_revision) is not int or expected_revision<1:
+            raise ValueError('予約の版番号を確認してください。')
+        if item['revision']!=expected_revision:return None
+    if item['deleted'] or not item['enabled']:return None
+    kind=item['kind']
+    if kind=='once':planned=_aware(item['run_at'])
+    else:
+        day=1 if kind=='month-start' else monthrange(current.year,current.month)[1]
+        hour,minute=map(int,item['time'].split(':'))
+        planned=current.replace(day=day,hour=hour,minute=minute,second=0,microsecond=0)
+    if planned.date()!=current.date() or current<planned:return None
+    if kind=='month-start':month=planned.strftime('%Y-%m')
+    elif kind=='month-end':month=(planned.replace(day=1)+timedelta(days=32)).strftime('%Y-%m')
+    else:month=None
+    return dict(schedule_id=item['id'],schedule_revision=item['revision'],kind=kind,
+                scheduled_for=planned.isoformat(),slot_date=planned.date().isoformat(),
+                include_pdfs=item['include_pdfs'],comparison_month=month)
+
+
+def configured_next_slots(settings,now,count=8):
+    """Preview configured enabled occurrences without writing preferences."""
+    from schedule_settings import validate_settings
+    current=_aware(now);items=validate_settings(settings)['schedules'];result=[]
+    if type(count) is not int or not 0<=count<=1000:raise ValueError('予定表示件数を確認してください。')
+    for item in items:
+        if item['deleted'] or not item['enabled']:continue
+        if item['kind']=='once':
+            planned=_aware(item['run_at'])
+            if planned<current:continue
+        else:
+            hour,minute=map(int,item['time'].split(':'))
+            day=1 if item['kind']=='month-start' else monthrange(current.year,current.month)[1]
+            planned=current.replace(day=day,hour=hour,minute=minute,second=0,microsecond=0)
+            if planned<current:
+                first=current.replace(day=1)+timedelta(days=32)
+                day=1 if item['kind']=='month-start' else monthrange(first.year,first.month)[1]
+                planned=first.replace(day=day,hour=hour,minute=minute,second=0,microsecond=0)
+        plan=due_configured_schedule(item,planned)
+        plan['label']=item['label'];result.append(plan)
+    return sorted(result,key=lambda item:(item['scheduled_for'],item['schedule_id']))[:count]
+
+
 def observation_timeliness(scheduled_for,observed_at,tolerance_minutes=30):
     """Classify actual acquisition time without claiming an exact 16:00 value.
 

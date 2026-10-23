@@ -20,7 +20,8 @@ import unicodedata
 import uuid
 
 from ledger import Store, LedgerError
-from monthly_schedule import JST, ROLES, due_slot, next_slots, _aware
+from monthly_schedule import (JST, ROLES, due_slot, next_slots, _aware,
+                              due_configured_schedule, configured_next_slots)
 from monthly_records import (REQUIRED, MonthlyRecordError, comparison, load_measurements,
                              save_measurement, select_measurement)
 from acquisition_journal import _observation
@@ -31,6 +32,38 @@ from version import APP_VERSION
 
 ACCOUNTS = tuple('ABCD')
 BASE = Path(__file__).resolve().parent
+
+RUN_ERROR_HINTS = {
+    'UNKNOWN': '原因を絞れませんでした。ブラウザーを表示してテストし、保存済みの診断を確認してください。',
+    'MANUAL_AUTH_REQUIRED': '保存ログイン情報・追加認証・口座名義を手動で確認し、テスト取得をやり直してください。',
+    'EDGE_LAUNCH_FAILED': 'EdgeとPythonの導入を確認し、setup_all_windows.batを実行してください。',
+    'SBI_SITE_UNAVAILABLE': 'SBIサイトへ接続できません。通信とサービス状況を確認してください。',
+    'LOGIN_FORM_NOT_READY': 'SBIログイン欄を確認できません。ブラウザーを表示してテストしてください。',
+    'SBI_AUTHENTICATION_FAILED': 'SBIの認証完了を確認できません。追加認証・ログイン情報を画面で確認してください。',
+    'IDENTITY_NOT_CONFIRMED': 'ログイン名義を確認できません。PDF名義とSBI口座を確認してください。',
+    'POST_NAVIGATION_FAILED': '電子ポストへの移動を確認できません。表示テストで移動先と追加確認を確認してください。',
+    'PDF_COLLECTION_FAILED': 'PDFの取得・保存を完了できません。保存先とPDF取得結果一覧を確認してください。',
+    'SUMMARY_NAVIGATION_FAILED': '口座サマリーへ戻れませんでした。表示テストで口座管理への移動を確認してください。',
+    'SUMMARY_NOT_OBSERVED': '口座サマリーの株式・現金を読めませんでした。表示テストでサマリーを確認してください。',
+    'SUMMARY_VALUES_CONFLICT': '資産の表示額が安定しないか整合しません。金額を推定せず停止しています。',
+    'ASSET_NOT_OBSERVED': '資産表示を確認できません。表示テストと取得画面の診断を確認してください。',
+    'ACQUISITION_SAVE_FAILED': '取得した資産の証跡を保存できません。空き容量・保存先を確認してください。',
+    'STORAGE_ERROR': 'ファイル保存またはバックアップに失敗しました。空き容量・アクセス権を確認してください。',
+    'METADATA_INTEGRITY': '保存記録の名義・整合性を確認できません。元の記録を保持して確認してください。',
+    'LEDGER_VALIDATION': '取得値または台帳との整合性を確認できません。口座設定とローカル診断を確認してください。',
+    'BUSY': '別の取得・更新が実行中です。終了後に実行してください。',
+    'SCHEDULE_CHANGED': '実行中に予約が変更・無効化されました。古い予約の処理を停止しました。',
+    'SCHEDULE_CONFIGURATION': '予約設定を確認できません。予約画面で設定・日時・版番号を確認してください。',
+    'SCHEDULE_EXPIRED': '予定日を過ぎたため、この予約の取得を停止しました。別日の残高へ読み替えません。',
+}
+for _gmail_code in ('NEEDS_CONSENT','SCOPE_MISSING','OFFLINE_PERMISSION','CLIENT_MISSING',
+                    'CLIENT_CHANGED','CLIENT_INVALID','CLIENT_CONFIG','CLIENT_JSON','CLIENT_AMBIGUOUS',
+                    'RECIPIENT_MISSING','RECIPIENT_INVALID','RECIPIENT_CONFIG','RECIPIENT_MISMATCH',
+                    'MAILBOX_MISSING','MAILBOX_INVALID','MAILBOX_CONFIG','MAILBOX_MISMATCH',
+                    'ACCOUNT_CONFIG','LOCAL_SETTINGS','ACCESS_DENIED','API_FORBIDDEN','DEPENDENCY'):
+    RUN_ERROR_HINTS[_gmail_code] = 'Gmail連携の設定・利用許可をアプリで確認してください。無人処理では初回許可画面を開きません。'
+for _gmail_code in ('CONNECTION','CONSENT_TIMEOUT','API_LIMIT'):
+    RUN_ERROR_HINTS[_gmail_code] = 'Gmail通信・応答時間・利用上限を確認し、時間を置いてテストしてください。'
 
 
 def _now():
@@ -277,20 +310,57 @@ def _error(error):
     return '取得を完了できませんでした。Gmail連携・SBIの追加認証・通信とローカル診断を確認してください。'
 
 
+def _failure(error, pdf=False):
+    code = getattr(error, 'code', None) or getattr(error, 'acquisition_code', None)
+    if code not in RUN_ERROR_HINTS:
+        if isinstance(error, OSError):code = 'STORAGE_ERROR'
+        elif isinstance(error, MonthlyRecordError) or type(error).__name__=='ScheduledRecordError':code = 'METADATA_INTEGRITY'
+        elif type(error).__name__=='ScheduleSettingsError':code = 'SCHEDULE_CONFIGURATION'
+        elif isinstance(error, LedgerError):code = 'LEDGER_VALIDATION'
+        else:code = 'UNKNOWN'
+    prefix = 'pdf_error' if pdf else 'error'
+    return {prefix: _error(error), prefix+'_code': code, prefix+'_hint': RUN_ERROR_HINTS[code]}
+
+
+def _monthly_slot(plan):
+    return dict(role=plan['kind'], scheduled_for=plan['scheduled_for'],
+                slot_date=plan['slot_date'], comparison_month=plan['comparison_month'],
+                include_pdfs=plan['include_pdfs'])
+
+
 def run_monthly(base, *, role='auto', now=None, authenticate=None, acquire=None,
                 playwright=None, clock=None, cancelled=lambda: False,
-                progress=lambda _: None, test=False, include_pdfs=None):
+                progress=lambda _: None, test=False, include_pdfs=None,
+                show_browser=False, schedule_id=None, schedule_revision=None):
     base = Path(base).absolute()
     initial = _aware(now) if now is not None else _now()
     clock = clock or _now
     slot = due_slot(initial, role)
+    plan = None
+    planning_error = None
+    if show_browser and not test:
+        planning_error=UpdateError('SCHEDULE_CONFIGURATION','ブラウザー表示は明示テストだけで指定してください。')
+    if include_pdfs is not None and type(include_pdfs) is not bool:
+        planning_error=UpdateError('SCHEDULE_CONFIGURATION','PDF取得の選択を確認してください。')
+    if schedule_id is not None:
+        try:
+            if test:raise ValueError('テスト取得は予約枠を消費しません。予約IDと同時に指定できません。')
+            from schedule_settings import get_schedule
+            item = get_schedule(base, schedule_id)
+            plan = due_configured_schedule(item, initial, expected_revision=schedule_revision) if item else None
+            slot = plan
+            if plan is not None and include_pdfs is not None and include_pdfs != plan['include_pdfs']:
+                raise UpdateError('SCHEDULE_CONFIGURATION','予約したPDF取得の設定を実行引数で変更できません。予約画面で変更してください。')
+        except (ValueError, OSError) as error:
+            planning_error = error
     result = dict(status='skipped', exit_code=0, slot=slot, test=bool(test),
                   accounts={}, comparison=None, comparison_csv=None, run_path=None,
                   version=APP_VERSION, started_at=initial.isoformat())
-    if not test and slot is None:
+    if not test and slot is None and planning_error is None:
         result['note'] = '今日は対象日でないか、16時前です。過去の予定へ遡って取得しません。'
         return result
     try:
+        if planning_error is not None:raise planning_error
         _safe(base, True)
         _safe(base / 'data', True)
         _safe(base / 'data' / 'ledger.sqlite3')
@@ -317,17 +387,33 @@ def run_monthly(base, *, role='auto', now=None, authenticate=None, acquire=None,
             profiles = {row['id']: row for row in live.accounts()}
             owners = {a: _owner(profiles[a].get('owner_name')) for a in ACCOUNTS}
             labels = {a: profiles[a]['label'] for a in ACCOUNTS}
+            backend = None
+            if plan is not None:
+                from scheduled_run_store import ScheduledRunStore
+                backend = ScheduledRunStore(base, plan, owners)
             if not test:
-                load_measurements(base, accounts=ACCOUNTS, owners=owners)  # Preflight every owner/hash.
-                for account in ACCOUNTS:
-                    _pdf_done(base, slot, account, owners[account]) if slot['include_pdfs'] else None
-            holds = {a: blocked(base, slot, a, owners[a]) for a in ACCOUNTS} if not test else {}
+                if backend:
+                    backend.preflight()
+                    if plan['kind'] != 'once':load_measurements(base, accounts=ACCOUNTS, owners=owners)
+                else:
+                    load_measurements(base, accounts=ACCOUNTS, owners=owners)
+                    for account in ACCOUNTS:
+                        _pdf_done(base, slot, account, owners[account]) if slot['include_pdfs'] else None
+            holds = ({a: (backend.held(a) if backend else blocked(base, slot, a, owners[a]))
+                      for a in ACCOUNTS} if not test else {})
             sessions = {}
             browser_api = playwright
 
             def check():
                 if cancelled():
                     raise Cancelled()
+                if not test and slot and _aware(clock()).date().isoformat()!=slot['slot_date']:
+                    raise UpdateError('SCHEDULE_EXPIRED', RUN_ERROR_HINTS['SCHEDULE_EXPIRED'])
+                if plan is not None:
+                    from schedule_settings import get_schedule
+                    current = get_schedule(base, plan['schedule_id'])
+                    if not current or current['deleted'] or not current['enabled'] or current['revision'] != plan['schedule_revision']:
+                        raise UpdateError('SCHEDULE_CHANGED', RUN_ERROR_HINTS['SCHEDULE_CHANGED'])
 
             def resources(account):
                 nonlocal browser_api
@@ -350,8 +436,9 @@ def run_monthly(base, *, role='auto', now=None, authenticate=None, acquire=None,
                     return False
                 holds[account] = True
                 code = getattr(error, 'code', 'MANUAL_AUTH_REQUIRED')
-                save_attention(base, slot, account, owners[account],
-                               code=code if code in MANUAL_CODES else 'MANUAL_AUTH_REQUIRED')
+                code=code if code in MANUAL_CODES else 'MANUAL_AUTH_REQUIRED'
+                if backend:backend.hold(account,code)
+                else:save_attention(base, slot, account, owners[account],code=code)
                 return True
 
             def report():
@@ -372,14 +459,19 @@ def run_monthly(base, *, role='auto', now=None, authenticate=None, acquire=None,
                     state = result['accounts'][account]
                     progress(f'口座{account}：口座サマリーの株式・現金を確認します。')
                     try:
-                        record = select_measurement(base, account, slot, owners[account]) if not test else None
+                        record = (backend.select(account) if backend else
+                                  select_measurement(base, account, slot, owners[account])) if not test else None
                         if record and record['summary']['complete']:
+                            if plan and plan['kind'] != 'once':
+                                save_measurement(base, account, owners[account], _monthly_slot(plan), record['summary'],
+                                                 attempt_id='scheduled-'+record['attempt_id'])
                             _append_live(live, account, owners[account], _from_record(record))
                             state.update(asset_status='reused', observed_at=record['summary']['observed_at'],
                                          timing=record['timing'])
                         elif holds.get(account):
                             state.update(asset_status='needs-attention',
-                                error='認証・設定の確認待ちです。修正後にテスト取得で確認してください。')
+                                error='認証・設定の確認待ちです。修正後にテスト取得で確認してください。',
+                                error_code='MANUAL_AUTH_REQUIRED',error_hint=RUN_ERROR_HINTS['MANUAL_AUTH_REQUIRED'])
                         else:
                             pw, session = resources(account)
                             since = _aware(clock())
@@ -387,27 +479,34 @@ def run_monthly(base, *, role='auto', now=None, authenticate=None, acquire=None,
                                 before = {tuple(row) for row in _rows(stage, account)}
                                 outcome = acquire(pw, account, stage, gmail_session=session,
                                     documents=False, capture_assets=True, summary_only=True,
-                                    headless=True, target_dates=(), progress=progress, cancelled=cancelled)
+                                    headless=not show_browser, target_dates=(), progress=progress, cancelled=cancelled)
                                 check()
                                 if not isinstance(outcome, dict) or outcome.get('complete') is not True:
                                     raise LedgerError('口座サマリー取得の完了を確認できません。')
                                 item = _fresh(stage, account, before, since, _aware(clock()))
                             summary = _summary(item)
                             if not test:
-                                measurement = save_measurement(base, account, owners[account], slot, summary)
+                                if backend:
+                                    measurement = backend.save(account, summary)
+                                    if plan['kind'] != 'once':
+                                        save_measurement(base, account, owners[account], _monthly_slot(plan), summary,
+                                                         attempt_id='scheduled-'+measurement.stem)
+                                else:measurement = save_measurement(base, account, owners[account], slot, summary)
                                 state['measurement_path'] = str(measurement)
                             state.update(observed_at=summary['observed_at'], missing=summary['missing'])
-                            if test:
+                            if test or plan is not None:
                                 state['summary'] = summary
                             _append_live(live, account, owners[account], item)
                             state['asset_status'] = 'complete' if summary['complete'] else 'partial'
                             if test and summary['complete']:
                                 state['attention_cleared'] = clear_attention(base, account, owners[account])
+                                from scheduled_run_store import clear_account_attention
+                                state['attention_cleared'] += clear_account_attention(base,account,owners[account])
                     except Cancelled:
                         raise
                     except Exception as error:
                         check()
-                        state.update(asset_status='failed', error=_error(error))
+                        state.update(asset_status='failed', **_failure(error))
                         if hold(account, error):
                             state['asset_status'] = 'needs-attention'
                     report()
@@ -422,13 +521,13 @@ def run_monthly(base, *, role='auto', now=None, authenticate=None, acquire=None,
                             check_owner(account)
                             if holds.get(account):
                                 state['pdf_status'] = 'blocked'
-                            elif not test and _pdf_done(base, slot, account, owners[account]):
+                            elif not test and (backend.pdf_done(account) if backend else _pdf_done(base, slot, account, owners[account])):
                                 state['pdf_status'] = 'reused'
                             else:
                                 pw, session = resources(account)
                                 with _stage(live) as stage:
                                     outcome = acquire(pw, account, stage, gmail_session=session,
-                                        documents=True, capture_assets=False, headless=True,
+                                        documents=True, capture_assets=False, headless=not show_browser,
                                         target_dates=(), progress=progress, cancelled=cancelled)
                                 check()
                                 check_owner(account)
@@ -436,18 +535,19 @@ def run_monthly(base, *, role='auto', now=None, authenticate=None, acquire=None,
                                         or outcome.get('pdf_collected') is not True):
                                     raise LedgerError('PDF一覧全体の取得完了を確認できません。')
                                 if not test:
-                                    _save_pdf_done(base, slot, account, owners[account], outcome, clock())
+                                    if backend:backend.save_pdf(account,outcome,clock())
+                                    else:_save_pdf_done(base, slot, account, owners[account], outcome, clock())
                                 state.update(pdf_status='complete', saved=outcome.get('saved', 0),
                                              duplicate=outcome.get('duplicate', 0))
                         except Cancelled:
                             raise
                         except Exception as error:
                             check()
-                            state.update(pdf_status='failed', pdf_error=_error(error))
+                            state.update(pdf_status='failed', **_failure(error,pdf=True))
                             if hold(account, error):
                                 state['pdf_status'] = 'blocked'
                         report()
-                if not test:
+                if not test and (plan is None or plan['kind'] != 'once'):
                     result['comparison'] = comparison(base, slot['comparison_month'], owners)
                     result['comparison_csv'] = export_comparison(base, result['comparison'], labels)
                 complete = all(state['asset_status'] in ('complete', 'reused') and
@@ -457,11 +557,11 @@ def run_monthly(base, *, role='auto', now=None, authenticate=None, acquire=None,
             except (Cancelled, KeyboardInterrupt):
                 result.update(status='cancelled', exit_code=1, error='中止しました。保存済みの記録は保持しています。')
             except Exception as error:
-                result.update(status='failed', exit_code=1, error=_error(error))
+                result.update(status='failed', exit_code=1, **_failure(error))
             report()
     except Exception as error:
         result.update(status='busy' if isinstance(error, UpdateError) and error.code == 'BUSY' else 'failed',
-                      exit_code=1, error=_error(error))
+                      exit_code=1, **_failure(error))
         # A preflight failure must replace an old success indication, too. Never
         # overwrite an active job's status when its shared lock is held.
         if result['status'] != 'busy' and (base / 'data' / 'ledger.sqlite3').is_file():
@@ -479,23 +579,46 @@ def run_monthly(base, *, role='auto', now=None, authenticate=None, acquire=None,
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='月末・1日16:00 JSTの口座サマリー集計。月初はPDFも保存します。')
+    parser = argparse.ArgumentParser(description='設定した日本時間の予約に従い、口座サマリー・PDFを取得します。')
     parser.add_argument('--role', choices=ROLES, default='auto')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--scheduled', action='store_true')
     mode.add_argument('--test', action='store_true', help='現在の資産を確認。月次本番の記録・完了扱いにはしません。')
     parser.add_argument('--include-pdfs', action='store_true', default=None)
+    parser.add_argument('--show-browser', action='store_true', help='テスト時だけブラウザーを表示します。')
+    parser.add_argument('--schedule-id', help='保存済み予約ID。無効・削除・変更済みの予約では取得しません。')
+    parser.add_argument('--schedule-revision', type=int, help='登録時の予約の版番号。古いタスクを停止します。')
     parser.add_argument('--dry-run', action='store_true', help='予定表示だけ。設定やブラウザーへアクセスしません。')
     args = parser.parse_args(argv)
+    if args.show_browser and not args.test:parser.error('--show-browserは--testと組み合わせてください。')
+    if args.include_pdfs and not args.test:parser.error('--include-pdfsは--testと組み合わせてください。予約は保存したPDF設定に従います。')
+    if args.schedule_revision is not None and not args.schedule_id:parser.error('予約の版番号には予約IDが必要です。')
+    if args.test and args.schedule_id:parser.error('テスト取得は予約IDを指定せず実行してください。')
     if args.dry_run:
-        print(json.dumps(dict(slot=due_slot(_now(), args.role), next=next_slots(_now()),
-                              planning_only=True), ensure_ascii=False, indent=2))
+        from schedule_settings import load_settings, get_schedule
+        settings=load_settings(BASE,create=False)
+        slot=(due_configured_schedule(get_schedule(BASE,args.schedule_id),_now(),args.schedule_revision)
+              if args.schedule_id else due_slot(_now(),args.role))
+        print(json.dumps(dict(slot=slot,next=configured_next_slots(settings,_now()),
+                             planning_only=True),ensure_ascii=False,indent=2))
         return 0
     if os.name != 'nt':
         print('実際の自動取得は、連携設定を保存した同じWindowsユーザーで実行してください。')
         return 2
-    result = run_monthly(BASE, role=args.role, test=args.test, include_pdfs=args.include_pdfs,
-                         progress=lambda message: print(message, flush=True))
+    schedule_id=args.schedule_id
+    # Old task actions must also obey persisted changes/deletions until Windows
+    # has been synchronized with the new revision-bound task definitions.
+    if args.scheduled and not schedule_id:
+        from schedule_settings import get_schedule
+        candidates=(args.role,) if args.role!='auto' else ('month-end','month-start')
+        schedule_id=next((key for key in candidates if
+            due_configured_schedule(get_schedule(BASE,key),_now()) is not None),None)
+        if schedule_id is None:
+            print('無効・削除済み、対象日以外、または予定時刻前のため取得しません。');return 0
+    result = run_monthly(BASE,role=args.role,test=args.test,include_pdfs=args.include_pdfs,
+                         show_browser=args.show_browser,schedule_id=schedule_id,
+                         schedule_revision=args.schedule_revision,
+                         progress=lambda message: print(message,flush=True))
     print(json.dumps({k: result.get(k) for k in ('status', 'exit_code', 'error', 'run_path', 'comparison_csv')},
                      ensure_ascii=False, indent=2))
     return result['exit_code']

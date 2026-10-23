@@ -10,6 +10,8 @@ import hashlib
 import re
 import sys
 import time
+import unicodedata
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -30,7 +32,11 @@ DISCOVER = r"""() => {
    const s=typeof getComputedStyle==='function'?getComputedStyle(el):{};
    return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};
  const clean=s=>(s||'').replace(/\s+/g,' ').trim();
- const titleWords=['外国債券利金・償還金お支払のご案内（兼）支払通知書',
+ const titleWords=['外国株式等株式分割・権利売却等のご案内',
+   '特定累積投資勘定基準額等通知書','非課税口座内上場株式等払出通知書',
+   '外国株式等配当金等のご案内（兼）支払通知',
+   '外国株式等取引報告書','外国債券取引報告書','特定口座年間取引報告書',
+   '外国債券利金・償還金お支払のご案内（兼）支払通知書',
    '外国債券利金・償還金お支払のご案内','株式等利益剰余金配当金のお知らせ',
    '投資信託取引報告書（特定振替等）','投資信託取引報告書',
    '株式等配当金のお知らせ','譲渡益税徴収・還付のお知らせ','汎用累投売買報告書',
@@ -51,8 +57,17 @@ DISCOVER = r"""() => {
   const text=clean(original).replace(/有効期限\s*20\d{2}\/\d{1,2}\/\d{1,2}/g,'');
   const match=text.match(/20\d{2}\/\d{1,2}\/\d{1,2}/);if(!match||text.length>5000)continue;
   const date=match[0].split('/').map((v,i)=>i?v.padStart(2,'0'):v).join('/');
-  const lines=original.split(/\n+/).map(clean).filter(v=>/報告書|通知書|お知らせ|ご案内|明細/.test(v));
-  const title=titleWords.find(t=>text.includes(t))||(lines[0]||'電子交付書類').replace(/20\d{2}\/\d{1,2}\/\d{1,2}/g,'').trim().slice(0,160);
+  let labelOriginal=original;
+  if(typeof header.cloneNode==='function'){
+   const copy=header.cloneNode(true);
+   for(const icon of copy.querySelectorAll('mat-icon,.material-icons,.material-icons-outlined,.material-symbols-outlined'))icon.remove();
+   labelOriginal=copy.textContent||original;
+  }
+  const cleanTitle=s=>clean(s).replace(/^(?:(?:(?:mark_email_unread|drafts|star_border|star|add|remove|expand_more|expand_less)\b|[+☆★])\s*)+/g,'').replace(/(?:\s*(?:\b(?:mark_email_unread|drafts|star_border|star|add|remove|expand_more|expand_less)|[+☆★]))+$/g,'').trim();
+  const titleHeader=labelOriginal.replace(/有効期限\s*20\d{2}\/\d{1,2}\/\d{1,2}/g,'');
+  const lines=titleHeader.split(/\n+/).map(cleanTitle).filter(v=>/報告書|通知書|お知らせ|ご案内|明細/.test(v));
+  const fallbackLines=titleHeader.split(/\n+/).map(cleanTitle).filter(v=>v&&!/^20\d{2}\/\d{1,2}\/\d{1,2}$/.test(v));
+  const title=titleWords.find(t=>text.includes(t))||(lines[0]||fallbackLines[0]||'電子交付書類').replace(/20\d{2}\/\d{1,2}\/\d{1,2}/g,'').replace(/(?:[+☆★]|add|remove|expand_more|expand_less)\s*$/g,'').trim().slice(0,160);
   const label=clean([...new Set([control.innerText,control.textContent,control.getAttribute('aria-label'),control.getAttribute('title')].filter(Boolean))].join(' '));
   const href=control.getAttribute('href')||'';
   const isHeader=control===header||['true','false'].includes(control.getAttribute('aria-expanded'));
@@ -71,7 +86,7 @@ DISCOVER = r"""() => {
   for(const name of ['data-document-id','data-delivery-id','data-report-id']){
    const value=typeof card.getAttribute==='function'?card.getAttribute(name):null;if(value){stable_id=name+':'+value;break;}
   }
-  const fingerprint=text.replace(/[☆★]/g,'').replace(/(?:mark_email_unread|drafts|expand_more|expand_less|star_border|star|add|remove)/g,'').trim();
+  const fingerprint=clean(labelOriginal).replace(/有効期限\s*20\d{2}\/\d{1,2}\/\d{1,2}/g,'').replace(/[☆★]/g,'').replace(/\b(?:mark_email_unread|drafts|expand_more|expand_less|star_border|star|add|remove)\b/g,'').trim();
   const rect=card.getBoundingClientRect?card.getBoundingClientRect():control.getBoundingClientRect();
   const scroller=typeof window!=='undefined'?window.__familyPdfScroll:null;
   const top=(scroller&&scroller!==document.scrollingElement?scroller.scrollTop:((typeof window!=='undefined'&&window.scrollY)||0))+(rect.top||0);
@@ -113,6 +128,20 @@ SCROLL = r"""({top,step}) => {
  const before=scroller.scrollTop,viewport=scroller===document.scrollingElement?window.innerHeight:scroller.clientHeight;
  scroller.scrollTop=typeof top==='number'?Math.max(0,top):before+Math.max(200,Math.floor(viewport*(step||.8)));
  return {before,after:scroller.scrollTop,height:scroller.scrollHeight,viewport};
+}"""
+
+# Scope values are hashed in memory. Never persist a raw authenticated URL or
+# search/filter text in the incremental index.
+SOURCE_SCOPE = r"""() => {
+ const visible=el=>{const r=el.getBoundingClientRect(),s=getComputedStyle(el);return !!(r.width&&r.height)&&s.display!=='none'&&s.visibility!=='hidden';};
+ const clean=s=>(s||'').replace(/\s+/g,' ').trim().slice(0,300);
+ const controls=[...document.querySelectorAll('input:not([type=hidden]):not([type=password]),select,[role=combobox]')].filter(visible).slice(0,100).map(el=>({
+  role:el.getAttribute('role')||el.tagName,type:el.type||'',label:clean(el.getAttribute('aria-label')||el.name||el.getAttribute('placeholder')),
+  value:clean(el.value===undefined?el.innerText:el.value),checked:!!el.checked
+ }));
+ const selected=[...document.querySelectorAll('[aria-selected=true],[aria-current],button[aria-pressed=true],[role=switch][aria-checked=true]')].filter(visible).slice(0,100).map(el=>clean(el.innerText||el.getAttribute('aria-label'))).sort();
+ return {route:location.pathname+location.search+location.hash,controls,selected,
+  has_filters:controls.length>0||!!location.search||location.hash.includes('?')||selected.some(label=>label&&!/^(?:すべて|全て|すべての書類|All)$/i.test(label))};
 }"""
 
 
@@ -738,6 +767,217 @@ class _DocumentCache:
         temporary.replace(self.path)
 
 
+def _compact_metadata(value):
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(value)))
+
+
+def _header_pair(item):
+    try:
+        if not isinstance(item.get('date'), str) or not isinstance(item.get('title'), str):
+            return None
+        parts = [int(part) for part in item['date'].split('/')]
+        stamp = date(*parts).isoformat()
+        title = _compact_metadata(item['title'])
+        if not title or len(title) > 160:
+            return None
+        return stamp, title
+    except (KeyError, ValueError, TypeError, OverflowError):
+        return None
+
+
+def _header_identity(account, item):
+    pair = _header_pair(item)
+    fingerprint = item.get('fingerprint')
+    if not pair or not isinstance(fingerprint, str) or not fingerprint.strip() or len(fingerprint) > 5000:
+        return None
+    return hashlib.sha256(json.dumps([account, *pair, _compact_metadata(fingerprint)],
+                                     ensure_ascii=False).encode()).hexdigest()
+
+
+def _verified_cached_pdf(folder, entry):
+    """A cache record is useful only while its ordinary PDF still has that hash."""
+    filename = entry.get('file')
+    digest = entry.get('sha256')
+    if (not isinstance(filename, str) or not filename or Path(filename).name != filename
+            or not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}', digest)):
+        return None
+    path = folder / filename
+    try:
+        info = path.lstat()
+        import stat
+        if (path.is_symlink() or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+                getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0) or
+                info.st_size > MAX_PDF_BYTES or path.resolve().parent != folder.resolve()):
+            return None
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != digest:
+            return None
+        validate_pdf(raw)
+        return path, raw
+    except (OSError, ValueError):
+        return None
+
+
+def _legacy_header_matches(raw, item, owner):
+    """Bootstrap old filenames only with independently readable PDF evidence.
+
+    Filename/audit date alone is not provenance: older versions could attach a
+    neighboring PDF to the wrong heading. Require its exact title, an explicitly
+    labelled publication/creation date and, when supplied, the holder plus 様.
+    """
+    import io
+    import pdfplumber
+    pair = _header_pair(item)
+    if not pair:
+        return False
+    try:
+        with pdfplumber.open(io.BytesIO(raw)) as pdf:
+            text = _compact_metadata((pdf.pages[0].extract_text() or '')[:1800])
+    except Exception:
+        return False
+    if pair[1] not in text or (owner and owner + '様' not in text):
+        return False
+    dates = set()
+    for year, month, day in re.findall(r'(?:交付日|作成日|発行日|通知日|報告日)[:：]?(20\d{2})(?:年|[/.-])(\d{1,2})(?:月|[/.-])(\d{1,2})(?:日)?', text):
+        try:
+            dates.add(date(int(year), int(month), int(day)).isoformat())
+        except ValueError:
+            continue
+    return pair[0] in dates
+
+
+class _HeadingIndex:
+    """Owner-bound source mappings, with conservative legacy-header migration.
+
+    Header fallback is allowed only for one fully enumerated list with a unique
+    date/title. Multiple pages, duplicated headings and changed metadata require
+    a download; stable machine identifiers still work on paginated lists.
+    """
+    def __init__(self, folder, account, candidates, *, complete_list, expected_owner=None,
+                 source_scope='', allow_legacy=True):
+        self.folder = Path(folder) / account
+        self.path = self.folder / '取得見出し索引_v2.json'
+        self.account = account
+        self.owner = _compact_metadata(expected_owner) if expected_owner else ''
+        self.complete_list = bool(complete_list and self.owner)
+        self.scope = source_scope
+        self.allow_legacy = bool(allow_legacy)
+        self.entries = {}
+        self.invalidated = set()
+        self.bootstrap = 0
+        try:
+            if self.path.is_symlink() or self.path.stat().st_size > 4 * 1024 * 1024:
+                raise ValueError()
+            data = json.loads(self.path.read_text(encoding='utf-8'))
+            if (data.get('version') == 2 and data.get('account') == account and
+                    data.get('owner') == self.owner and isinstance(data.get('entries'), dict)):
+                self.entries = data['entries']
+        except (OSError, ValueError, AttributeError, RecursionError):
+            pass
+        self.original = dict(self.entries)
+        self.pairs = {}
+        self.headers = {}
+        for item in candidates:
+            pair = _header_pair(item)
+            key = _header_identity(account, item)
+            self.pairs[pair] = self.pairs.get(pair, 0) + 1
+            self.headers[key] = self.headers.get(key, 0) + 1
+        self.legacy_pairs = set()
+        for entry in self.entries.values():
+            if isinstance(entry, dict):
+                pair = _header_pair(entry)
+                if pair:
+                    self.legacy_pairs.add(pair)
+
+    def _keys(self, item, eligible=True):
+        result = []
+        stable = _cache_identity(self.account, item)
+        if stable:
+            result.append(('id:' + stable, '安定した書類ID・名義・保存済みPDFハッシュを照合'))
+        header = _header_identity(self.account, item)
+        unique = (self.complete_list and self.pairs.get(_header_pair(item)) == 1
+                  and self.headers.get(header) == 1)
+        if header and (unique or not eligible):
+            result.append(('header:' + self.scope + ':' + header, '同じ表示条件の全件一覧で一意な交付日・見出し・名義・保存済みPDFハッシュを照合'))
+        return result
+
+    def get(self, item):
+        for key, evidence in self._keys(item):
+            entry = self.entries.get(key)
+            if isinstance(entry, dict):
+                found = _verified_cached_pdf(self.folder, entry)
+                if found:
+                    return *found, evidence
+                self.entries.pop(key, None)
+                self.invalidated.add(key)
+        keys = [key for key, _ in self._keys(item) if key.startswith('header:')]
+        pair = _header_pair(item)
+        # A previously observed pair with changed metadata must be fetched again.
+        if not keys or not self.allow_legacy or pair in self.legacy_pairs:
+            return None
+        prefix = safe_part(item['date']) + '_' + safe_part(item['title']) + '_'
+        matches = {}
+        for path in self.folder.glob(prefix + '*.pdf'):
+            # Generated digest suffix is checked against the bytes, not trusted.
+            match = re.search(r'_([a-f0-9]{16})\.pdf\Z', path.name)
+            if not match:
+                continue
+            try:
+                import stat
+                info = path.lstat()
+                if (path.is_symlink() or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+                        getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)):
+                    continue
+                raw = path.read_bytes() if path.stat().st_size <= MAX_PDF_BYTES else b''
+            except OSError:
+                continue
+            digest = hashlib.sha256(raw).hexdigest()
+            if digest[:16] != match[1]:
+                continue
+            found = _verified_cached_pdf(self.folder, {'file': path.name, 'sha256': digest})
+            if found and _legacy_header_matches(raw, item, self.owner):
+                matches[digest] = found
+        if len(matches) != 1:
+            return None
+        path, raw = next(iter(matches.values()))
+        self.bootstrap += 1
+        self.put(item, path, raw)
+        return path, raw, '保存済みPDF本文の書類名・日付・名義を一覧の一意な見出しと照合'
+
+    def put(self, item, path, raw):
+        entry = {'file': path.name, 'sha256': hashlib.sha256(raw).hexdigest(),
+                 'date': item['date'], 'title': item['title'],
+                 'fingerprint': item.get('fingerprint', ''), 'scope_sha256': self.scope}
+        for key, _ in self._keys(item):
+            self.entries[key] = entry
+
+    def remove(self, item):
+        for key, _ in self._keys(item, eligible=False):
+            self.entries.pop(key, None)
+            self.invalidated.add(key)
+
+    def flush(self, commit=False):
+        if not commit:
+            self.entries = {key: value for key, value in self.original.items() if key not in self.invalidated}
+        if self.entries == self.original:
+            return
+        import os
+        import tempfile
+        if self.path.is_symlink():
+            raise OSError('高速化索引にリンクは使用できません。')
+        self.folder.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(prefix='.pdf_index_', suffix='.tmp', dir=self.folder)
+        try:
+            with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
+                json.dump({'version': 2, 'account': self.account, 'owner': self.owner,
+                           'entries': self.entries}, output, ensure_ascii=False, indent=2)
+                output.flush()
+                os.fsync(output.fileno())
+            Path(temporary).replace(self.path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+
+
 def _next_page(page):
     candidates = []
     names = re.compile(r'^(?:次へ|次のページ|次ページ|Next|Next page|>|›)$', re.I)
@@ -761,11 +1001,13 @@ def _page_signature(items):
     return tuple((item.get('stable_id', ''), item['date'], item['title'], item.get('fingerprint', item['key'])) for item in items)
 
 
-def collect(page, context, account, folder, limit=500, progress=print, cancelled=lambda: False):
+def collect(page, context, account, folder, limit=500, progress=print, cancelled=lambda: False,
+            expected_owner=None, force_download=False):
     _check_cancelled(cancelled)
     candidates = discover_all(page, cancelled=cancelled)
     counts = re.findall(r'全\s*([\d,]+)\s*件', page.locator('body').inner_text())
     expected = int(counts[0].replace(',', '')) if counts and len(set(counts)) == 1 else None
+    complete_list = expected is not None and expected == len(candidates) and _next_page(page) is None
     from collection_audit import Audit
     audit = Audit(folder, account, candidates, expected, defer=True)
     audit.data.update(complete=False, download_failed=0, unresolved=0, pages=0)
@@ -789,6 +1031,29 @@ def collect(page, context, account, folder, limit=500, progress=print, cancelled
     listen(context, 'page', register)
     listen(page, 'download', download)
     cache = _DocumentCache(folder, account)
+    scope = None
+    allow_legacy = False
+    if expected_owner:
+        try:
+            value = page.evaluate(SOURCE_SCOPE)
+            if isinstance(value, dict) and set(value) == {'route', 'controls', 'selected', 'has_filters'}:
+                scope = hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+                allow_legacy = value['has_filters'] is False
+        except Exception:
+            scope = None
+    headings = _HeadingIndex(folder, account, candidates, complete_list=complete_list,
+                             expected_owner=expected_owner, source_scope=scope or '',
+                             allow_legacy=bool(scope and allow_legacy))
+    if expected_owner and scope is None:
+        headings.complete_list = False
+    if not complete_list:
+        progress('複数ページまたは件数未照合のため、書類IDがないPDFは見出しだけで省略せず取得します。')
+    audit.data.update(downloaded_pdf_files=0, reused_pdf_files=0, pdf_download_attempts=0,
+                      legacy_pdf_headers_reused=0,
+                      heading_reuse_enabled=headings.complete_list and not force_download,
+                      force_download=bool(force_download))
+    if force_download:
+        progress('保存済みPDFも再確認します。今回の取得では高速化索引を使用しません。')
     saved = duplicates = 0
     failures = []
     failed_indices = set()
@@ -831,13 +1096,20 @@ def collect(page, context, account, folder, limit=500, progress=print, cancelled
                 for attempt in range(2):
                     popup_start = len(popups)
                     try:
-                        hit = cache.get(item)
-                        if hit:
+                        indexed = headings.get(item) if not force_download else None
+                        hit = cache.get(item) if not indexed and not expected_owner and not force_download else None
+                        fetched = False
+                        if indexed:
+                            path, raw, evidence = indexed
+                            created = False
+                        elif hit:
                             path, raw = hit
                             created = False
                             evidence = '安定した書類ID・メタデータ・保存済みPDFハッシュを照合'
                         else:
+                            audit.data['pdf_download_attempts'] += 1
                             raw, _ = _retrieve(page, context, item, responses, downloads, popups, cancelled=cancelled)
+                            fetched = True
                             evidence = _verify_document(raw, item)
                             path = None
                         digest = hashlib.sha256(raw).hexdigest()
@@ -846,6 +1118,8 @@ def collect(page, context, account, folder, limit=500, progress=print, cancelled
                             previous = digests[digest]
                             cache.remove(previous['item'])
                             cache.remove(item)
+                            headings.remove(previous['item'])
+                            headings.remove(item)
                             if previous['number'] not in failed_indices:
                                 failed_indices.add(previous['number'])
                                 failures.append((previous['item'], '別の一覧書類と同一PDFのため対応関係を未確認に戻しました。'))
@@ -855,10 +1129,13 @@ def collect(page, context, account, folder, limit=500, progress=print, cancelled
                         if path is None:
                             path, created = save_pdf(folder, account, item['date'], item['title'], raw)
                             cache.put(item, path, raw)
+                        headings.put(item, path, raw)
                         saved += int(created)
                         duplicates += int(not created)
+                        audit.data['downloaded_pdf_files'] += int(fetched)
+                        audit.data['reused_pdf_files'] += int(not fetched)
                         audit.update(item_number, status='新規保存' if created else '保存済み', file=path.name, star='操作なし', error=evidence + '。解析・台帳登録は取り込み時に実施')
-                        progress(f'{item["date"]} {item["title"]}：PDF保存確認')
+                        progress(f'{item["date"]} {item["title"]}：'+('PDF取得・保存確認' if fetched else '保存済み照合（再ダウンロードなし）'))
                         error = None
                         break
                     except CredentialError:
@@ -905,16 +1182,19 @@ def collect(page, context, account, folder, limit=500, progress=print, cancelled
             raise RuntimeError('ページ数が上限を超えています。期間を絞って再実行してください。')
         unresolved = (max(1, abs(expected - len(all_items))) if expected is not None and expected != len(all_items) else int(expected is None))
         audit.data.update(download_failed=len(failures), unresolved=unresolved, complete=not failures and not unresolved)
+        audit.data['legacy_pdf_headers_reused'] = headings.bootstrap
+        progress(f'PDF通信取得 {audit.data["downloaded_pdf_files"]}件／保存済み照合 {audit.data["reused_pdf_files"]}件（再ダウンロードなし）。')
         if unresolved:
             progress(f'件数照合未完了：画面件数 {expected if expected is not None else "未確認"}、検出件数 {len(all_items)}。全件取得成功とは扱いません。')
         return saved, duplicates, len(failures) + unresolved
     finally:
         responses.finish()
-        try:
-            cache.flush(commit=audit.data.get('complete', False))
-        except OSError:
-            audit.data['cache_warning'] = '高速化キャッシュを保存できません。次回もPDFを照合して取得します。'
-            progress(audit.data['cache_warning'])
+        for index in (cache, headings):
+            try:
+                index.flush(commit=audit.data.get('complete', False))
+            except OSError:
+                audit.data['cache_warning'] = '高速化キャッシュの一部を保存できません。保存済みPDFは保持し、次回も照合して取得します。'
+                progress(audit.data['cache_warning'])
         for emitter, event, callback in reversed(registrations):
             try:
                 emitter.remove_listener(event, callback)

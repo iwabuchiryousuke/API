@@ -124,7 +124,8 @@ class WindowsTaskPlanning(unittest.TestCase):
 
     def test_status_and_uninstall_are_ownership_scoped_and_do_not_require_timezone(self):
         source=wt.PS_SOURCE
-        self.assertIn('$task.Definition.RegistrationInfo.Description -ne $marker',source)
+        self.assertIn('$ownedDescription=$task.Definition.RegistrationInfo.Description -eq $marker',source)
+        self.assertIn('if((-not $ownedDescription)',source)
         self.assertIn('$taskUser -ne $currentSid',source)
         self.assertLess(source.index("if($Action -eq 'uninstall')"),source.index("if([TimeZoneInfo]::Local.Id"))
         self.assertIn('$folder.DeleteTask($name,0)',source)

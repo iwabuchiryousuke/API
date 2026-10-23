@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from ledger import LedgerError
-from pdf_batch import classify,KnownDocumentExclusion
+from pdf_batch import classify,KnownDocumentExclusion,ArchivedUnparsedDocument
 
 
 def pdf(first, later=''):
@@ -111,11 +111,13 @@ class DocumentClassificationTests(unittest.TestCase):
                 patch('pdf_batch.parse_balance',return_value='balance'):
             self.assertEqual(classify('unused.pdf'),('balance','balance'))
 
-    def test_unknown_document_title_remains_a_blocker(self):
+    def test_unknown_title_is_retained_unparsed_instead_of_becoming_a_known_type(self):
         with patch('pdf_batch.load_pdf',return_value=pdf('未確認の外国株式等のお知らせ')):
             with self.assertRaises(LedgerError) as error:
                 classify('unused.pdf')
             self.assertFalse(str(error.exception).startswith('対象外：'))
+            self.assertIsInstance(error.exception,ArchivedUnparsedDocument)
+            self.assertEqual(error.exception.code,'UNPARSED_PDF')
 
     def test_filename_alone_does_not_exclude_unknown_or_corrupt_pdf(self):
         from pypdf import PdfWriter

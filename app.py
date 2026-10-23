@@ -15,6 +15,14 @@ from login_credentials import (CredentialError,delete_credentials,has_credential
 BASE=Path(__file__).resolve().parent
 from version import APP_VERSION
 
+def start_schedule_bootstrap(base=BASE,popen=subprocess.Popen,platform_name=None):
+    """Seed/register defaults without a prompt; user deletions stay in settings."""
+    if (platform_name or os.name)!='nt':return None
+    try:
+        return popen([sys.executable,str(Path(base)/'windows_tasks.py'),'--action','bootstrap'],
+                     cwd=str(base),creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    except OSError:return None # Registration status is also available in the reservation window.
+
 class App:
     def __init__(self,root):
         from data_backup import backup_before_upgrade
@@ -38,11 +46,11 @@ class App:
         for label,fn in [('選択口座のPDFだけ取得',self.collect_epost),('保存したPDFのフォルダを開く',self.open_collected_pdfs),('PDF取得結果一覧',self.open_collection_audit),('配当・税還・利息を手動追加',self.add_cash_entry),('分割を登録',self.add_split)]:
             b=ttk.Button(epost,text=label,command=fn);b.pack(side='left',padx=4);self.buttons.append(b)
         extra=ttk.Frame(outer);extra.pack(fill='x',pady=(8,0))
-        for label,fn in [('4口座のPDF・資産・NISAを取得して一括反映',self.auto_collect),('取得した資産を確認',self.show_assets),('月末・1日の自動集計',self.show_monthly)]:
+        for label,fn in [('4口座のPDF・資産・NISAを取得して一括反映',self.auto_collect),('取得した資産を確認',self.show_assets),('自動取得の予約・月次比較',self.show_monthly)]:
             b=ttk.Button(extra,text=label,command=fn);b.pack(side='left',padx=4);self.buttons.append(b)
         settings=ttk.Menubutton(extra,text='口座・認証の設定')
         menu=tk.Menu(settings,tearoff=False)
-        for label,fn in [('PDF名義を確認・変更',self.set_pdf_owner),('SBIログイン情報',self.set_login_credentials),('Gmail連携を設定',self.connect_gmail),('Gmailだけ診断',self.check_gmail),('選択口座の資産だけ再取得',self.auto_assets),('資産額を手動記録',self.record_assets),('診断ZIPを作成',self.export_diagnostics),('説明書を開く',self.open_guide)]:
+        for label,fn in [('PDF名義を確認・変更',self.set_pdf_owner),('SBIログイン情報',self.set_login_credentials),('Gmail連携を設定',self.connect_gmail),('Gmailだけ診断',self.check_gmail),('選択口座の資産だけ再取得',self.auto_assets),('保存済みPDFも再確認して取得（選択口座）',lambda:self.collect_epost(force_pdf_refresh=True)),('資産額を手動記録',self.record_assets),('診断ZIPを作成',self.export_diagnostics),('説明書を開く',self.open_guide)]:
             menu.add_command(label=label,command=fn)
         settings.configure(menu=menu);settings.pack(side='left',padx=4);self.buttons.append(settings)
         unified=ttk.Frame(outer);unified.pack(fill='x',pady=(8,0))
@@ -68,6 +76,7 @@ class App:
         root.protocol('WM_DELETE_WINDOW',self.close);self.refresh()
         from initial_setup import ensure_personal
         root.after(150,lambda:ensure_personal(BASE,root))
+        root.after(800,lambda:start_schedule_bootstrap(BASE))
 
     def show_monthly(self):
         if self.busy:return
@@ -181,12 +190,12 @@ class App:
         if os.name=='nt':os.startfile(folder)
         else:webbrowser.open(folder.as_uri())
 
-    def collect_epost(self):
+    def collect_epost(self,force_pdf_refresh=False):
         try:
             a=self.selected()
             if a['id']=='E':raise LedgerError('父のPDFは保存フォルダへ手動で入れてください。')
             from update_dialog import launch
-            launch(self,BASE,online=True,accounts=[a['id']],acquire_only=True)
+            launch(self,BASE,online=True,accounts=[a['id']],acquire_only=True,force_pdf_refresh=force_pdf_refresh)
         except LedgerError as e:messagebox.showerror('口座を確認',str(e))
 
     def set_security_names(self):

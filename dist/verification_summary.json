@@ -1,18 +1,18 @@
 {
-  "version": "3.5.15",
-  "baseline_commit": "a47891e7dbcad383e832924b55bd478575177889",
-  "tests": 685,
+  "version": "3.5.16",
+  "baseline_commit": "6764fb1a505618c029fba4c236ecb409ed79ff37",
+  "tests": 835,
   "failures": 0,
   "errors": 0,
   "skipped": 0,
   "expected_failures": 0,
   "unexpected_successes": 0,
-  "seconds": 132.984,
+  "seconds": 143.811,
   "successful": true,
-  "test_source": "isolated extraction of code release ZIP; subsequent result-documentation update and test trailing blank-line normalization only",
-  "offline_browser_tests": 55,
+  "test_source": "isolated extraction of code release ZIP; subsequent result-documentation update only",
+  "offline_browser_tests": 64,
   "packaged_tests": {
-    "tests": 685,
+    "tests": 835,
     "failures": 0,
     "errors": 0,
     "skipped": 0
@@ -23,10 +23,12 @@
     "unique_pdf_documents": 99,
     "supported_documents": 59,
     "explicit_exclusions": 40,
+    "critical_pdf_errors": 0,
     "original_uploaded_trades": 28,
+    "original_uploaded_activities": 18,
     "latest_screenshot_trades": 79,
     "latest_ledger_verified": false,
-    "actual_nisa_transfer_pdf_verified": false,
+    "actual_cumulative_nisa_basis_pdf_verified": false,
     "earlier_large_zip_read": false
   },
   "excel": {
@@ -35,64 +37,88 @@
     "golden_management_entries": 13,
     "layout_or_formulas_changed": false
   },
-  "monthly_automation": {
+  "scheduling": {
     "timezone": "Asia/Tokyo",
-    "calendar_days": [
-      "last day of month",
-      "first day of month"
+    "default_schedules": [
+      "last calendar day 16:00",
+      "first calendar day 16:00"
     ],
-    "scheduled_time": "16:00",
-    "accounts": [
-      "A",
-      "B",
-      "C",
-      "D"
-    ],
-    "all_assets_before_pdfs": true,
-    "day_one_pdfs_saved": true,
-    "automatic_trade_commit": false,
-    "headless": true,
-    "new_runtime_dependencies": false,
-    "test_mode_consumes_production_slots": false,
-    "separate_comparison_csv": true,
-    "actual_observation_times_retained": true,
-    "exact_16_valuation_claimed": false,
-    "missing_components_treated_as_zero": false,
-    "unobserved_past_dates_reconstructed": false,
-    "full_data_backup_before_first_unattended_start": true,
-    "completed_assets_and_pdfs_reused_on_retry": true,
-    "known_manual_auth_failures_held_until_explicit_test_success": true,
-    "metadata_integrity_failures_stop_before_auth": true,
-    "pc_power_off_supported": false,
+    "default_registration_attempt_on_windows_gui_start": true,
+    "automatic_registration_verified_on_windows": false,
+    "editable_recurring_times": true,
+    "one_time_datetime_reservations": true,
+    "enable_disable_delete_supported": true,
+    "deleted_schedules_automatically_recreated": false,
+    "explicit_restore_defaults": true,
+    "reservation_revision_bound_actions_and_evidence": true,
+    "legacy_actions_obey_saved_preferences": true,
+    "midrun_edit_delete_and_calendar_expiry_stop": true,
+    "registration_updates_share_os_lock": true,
+    "existing_password_mode_preserved_at_bootstrap": true,
+    "test_show_browser_supported": true,
+    "pdf_test_optional": true,
+    "scheduled_pdf_policy_cannot_be_overridden_by_test_flags": true,
     "default_logon_mode": "InteractiveToken",
     "optional_logon_mode": "Password",
     "s4u_used": false,
+    "credentials_embedded_in_source_or_task_arguments": false,
+    "pc_power_off_supported": false,
     "wake_to_run_requested": true,
-    "wake_to_run_verified_on_windows": false
+    "wake_to_run_verified_on_windows": false,
+    "all_assets_before_pdfs": true,
+    "automatic_trade_commit": false,
+    "actual_observation_times_retained": true,
+    "exact_scheduled_time_valuation_claimed": false,
+    "unobserved_past_dates_reconstructed": false
   },
+  "pdf_archiving": {
+    "valid_unknown_or_unparsed_pdfs_retained": true,
+    "unparsed_financial_entries_invented": false,
+    "unparsed_files_do_not_stop_other_supported_imports": true,
+    "corrupt_source_owner_conflict_still_blocks": true,
+    "v2_account_owner_scope_bound_heading_index": true,
+    "legacy_filename_alone_trusted": false,
+    "fallback_requires_complete_unique_single_list": true,
+    "same_date_title_ambiguity_forces_fetch": true,
+    "filter_scope_bound_by_hash": true,
+    "force_refresh_available": true,
+    "offline_performance_example": {
+      "initial_pdf_gets": 2,
+      "subsequent_old_documents": 2,
+      "subsequent_new_documents": 1,
+      "subsequent_pdf_gets": 1
+    },
+    "unchanged_header_server_side_content_revision_detectable_without_refetch": false,
+    "live_sbi_speed_measured": false
+  },
+  "diagnostics": {
+    "fixed_safe_error_codes_and_hints": true,
+    "gmail_error_classification_preserved": true,
+    "cause_of_submitted_monthly_test_failure_identified": false
+  },
+  "new_runtime_dependencies": false,
   "release_upgrade": {
-    "from_version": "3.5.14",
-    "to_version": "3.5.15",
-    "changed_files": 39,
+    "from_version": "3.5.15",
+    "to_version": "3.5.16",
+    "changed_files": 37,
     "manifest_verified": true,
     "repeat_no_changes": true,
     "backup_manifest_present": true,
     "requirements_changed": false,
     "protected_fixture_hashes_unchanged": true,
-    "protected_fixture_files": 15
+    "protected_fixture_files": 18
   },
   "live_sbi_tested": false,
   "live_gmail_tested": false,
   "windows_tested": false,
-  "code_zip_sha256": "47f5ed0a325530045b88066e1bfacf6539012ca819c9a8a5fb8b770cf3114592",
-  "code_zip_bytes": 424797,
-  "code_zip_entries": 144,
+  "code_zip_sha256": "d597bde87ab1ea24310e2eca090cb79ca7fa7928c73e8e16a124c1bd41222ce5",
+  "code_zip_bytes": 492376,
+  "code_zip_entries": 158,
   "manifest_verified": true,
   "private_payloads_in_code_zip": 0,
-  "runtime_matches_verified_package": true,
-  "test_ast_matches_verified_package": true,
-  "post_test_changes": [
-    "test_monthly_runner_safety.py",
-    "検証結果_v3.5.15.md"
+  "runtime_and_tests_match_verified_package": true,
+  "post_test_documentation_changes": [
+    "README.md",
+    "検証結果_v3.5.16.md"
   ]
 }

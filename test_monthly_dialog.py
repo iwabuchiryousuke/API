@@ -54,7 +54,7 @@ class Checks(unittest.TestCase):
             self.assertIn('なし（両方取得）',str(result))
             self.assertIn('現金合計',str(result))
             self.assertEqual(len(result['rows']),4)
-            self.assertIsNone(result['warning'])
+            self.assertEqual(result['warning'],'ローカル診断を確認')
 
     def test_bad_duplicate_oversized_and_link_reports(self):
         with tempfile.TemporaryDirectory() as directory:

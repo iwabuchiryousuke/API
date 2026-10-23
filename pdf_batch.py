@@ -22,10 +22,16 @@ class DocumentExclusionRule:
     display_title:str=''
 
 
-# This finite list describes identified document types, not an instruction to
-# ignore arbitrary notices. New financial event parsers require verified PDFs.
+# Identified non-imported types have specific reasons. Other valid PDFs are
+# retained separately too; financial entries still require a verified parser.
 # More specific titles precede generic annual-report references in disclosures.
 KNOWN_DOCUMENT_EXCLUSIONS=(
+    DocumentExclusionRule(
+        'CUMULATIVE_NISA_BASIS',
+        '特定累積投資勘定基準額等通知書',
+        ('特定累積投資勘定基準額等通知書',),
+        '勘定の基準額等のお知らせで、売買約定・配当入金の明細ではありません。'
+        'PDF原本を保持し、取引集計には重ねて登録しません。',needs_review=False),
     DocumentExclusionRule(
         'FOREIGN_STOCK_CORPORATE_ACTION',
         '外国株式等株式分割・権利売却等のご案内',
@@ -74,6 +80,57 @@ class KnownDocumentExclusion(LedgerError):
         super().__init__('対象外：'+title+status+'。'+rule.reason)
 
 
+class ArchivedUnparsedDocument(LedgerError):
+    """A validated original that contributes no guessed financial entries."""
+    needs_review=True
+    def __init__(self,reason,code='UNPARSED_PDF',document_title='未対応のPDF書類'):
+        self.code=code
+        self.document_title=document_title
+        self.reason=reason
+        self.owner=None
+        super().__init__('保管のみ・未反映：'+reason+' PDF原本を保持し、この書類の金額・取引は集計しません。')
+
+
+def _with_owner(error,data):
+    # A positively readable owner is checked even when the financial layout is
+    # unsupported. A missing name never authorizes financial registration.
+    try:
+        from pdf_import import _owner
+        error.owner=_owner(data.pages[0].best_text or data.pages[0].text)
+    except (LedgerError,AttributeError,IndexError):error.owner=None
+    return error
+
+
+def _load_archive(path):
+    try:return load_pdf(path,max_pages=50)
+    except LedgerError as error:
+        if str(error).startswith('PDF機能の準備'):raise
+        # An image-only or long original can be archived without becoming a
+        # financial event. Invalid/truncated/non-PDF content remains fatal.
+        try:
+            raw=Path(path).read_bytes()
+            from epost_collector import validate_pdf
+            validate_pdf(raw)
+        except (OSError,ValueError):raise error from None
+        raise ArchivedUnparsedDocument('本文・様式を自動解析できません。原本の内容を確認してください。',
+            code='UNREADABLE_VALID_PDF') from None
+
+
+def _parse(path,data,kind,parser):
+    try:return kind,parser(path)
+    except LedgerError as error:
+        message=str(error)
+        if message.startswith('解析済み：'):raise
+        if '名義' in message and any(word in message for word in ('一致しません','一致しない','異な')):raise
+        raise _with_owner(ArchivedUnparsedDocument(
+            '対応候補の書類ですが、明細の形式・項目を確認できません。理由：'+message,
+            code='PARSER_UNCONFIRMED',document_title={'trade':'取引報告書','notice':'配当・分割等通知','balance':'取引残高報告書'}[kind]),data) from None
+    except ValueError:
+        raise _with_owner(ArchivedUnparsedDocument(
+            '対応候補の書類ですが、日付・数値等を確認できません。原本を確認してください。',
+            code='PARSER_UNCONFIRMED'),data) from None
+
+
 def _known_exclusion(first):
     for rule in KNOWN_DOCUMENT_EXCLUSIONS:
         if all(part in first for part in rule.required_title_parts) or any(marker in first for marker in rule.identifiers):
@@ -82,33 +139,33 @@ def _known_exclusion(first):
 
 
 def classify(path):
-    data=load_pdf(path,max_pages=50)
+    data=_load_archive(path)
     text=data.best_compact+data.compact
     first=data.pages[0].best_compact+data.pages[0].compact
     if 'A501' in text and '取引報告書' in text:
         from smbc_import import parse_smbc
-        return 'trade',parse_smbc(path)
+        return _parse(path,data,'trade',parse_smbc)
     # A balance report can mention bond interest, redemption and annual reports
     # in its disclosures. Its own first-page report identifier takes priority
     # over those incidental words; none of them changes the document's type.
     if any(marker in first for marker in ('STWHZB','FR00011M01')):
-        return 'balance',parse_balance(path)
+        return _parse(path,data,'balance',parse_balance)
     # Recognize first-page content/identifiers, never downloaded file names.
     # Incidental references on later pages cannot exclude a supported report.
     exclusion=_known_exclusion(first)
-    if exclusion is not None:raise exclusion
+    if exclusion is not None:raise _with_owner(exclusion,data)
     if ('株式等配当金のお知らせ' in text or
             '株式等利益剰余金配当金のお知らせ' in text or
             '割当株式等のお知らせ' in text or
             '割当株券のお知らせ' in text or
             '譲渡益税徴収・還付のお知らせ' in text):
-        return 'notice',parse_notice(path)
+        return _parse(path,data,'notice',parse_notice)
     if any(marker in text for marker in
            ('取引残高報告書','お預り残高等の明細','STWHZB','FR00011M01')):
-        return 'balance',parse_balance(path)
+        return _parse(path,data,'balance',parse_balance)
     if '株式取引報告書' in text or '投資信託取引報告書' in text:
-        return 'trade',parse_report(path)
-    raise LedgerError('対応する国内株式・投資信託の取引報告書、配当・分割・税還付通知、取引残高報告書ではありません。')
+        return _parse(path,data,'trade',parse_report)
+    raise _with_owner(ArchivedUnparsedDocument('対応する取引・配当・分割・残高報告の様式と確認できません。'),data)
 
 def _apply(store,actions,account,kind,doc):
     if kind=='trade':

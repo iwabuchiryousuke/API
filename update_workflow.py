@@ -11,7 +11,7 @@ from ledger import Store,LedgerError
 from login_credentials import CredentialError
 from activity import Activities
 from asset_snapshots import init as init_assets
-from pdf_batch import classify,_apply
+from pdf_batch import classify,_apply,ArchivedUnparsedDocument
 from standalone_excel import export_trades
 from version import APP_VERSION
 
@@ -155,16 +155,20 @@ class Workflow:
                         try:kind,doc=classify(path)
                         except LedgerError as e:
                             message=str(e)
-                            if message.startswith(('対象外：','解析済み：徴収・還付額0円')):
+                            if isinstance(e,ArchivedUnparsedDocument) or message.startswith(('対象外：','解析済み：')):
+                                owner=getattr(e,'owner',None)
+                                if owner:activities._owner(account,owner)
                                 summary.excluded_pdf_files+=1
-                                proposal.append({'account':account,'name':path.name,'kind':'対象外','new':0,'existing':0,'state':message})
+                                proposal.append({'account':account,'name':path.name,'kind':'保管のみ' if isinstance(e,ArchivedUnparsedDocument) else '対象外','new':0,'existing':0,'state':message})
+                                self.state.setdefault('retained_pdfs',[]).append(dict(account=account,name=path.name,
+                                    sha256=digest,code=getattr(e,'code','NON_TRANSACTION'),reason=message))
                                 if getattr(e,'needs_review',False) or '未解析' in message or any(word in message for word in ('外国株式','外国債券')):
                                     warning=f'PDF_NOT_PARSED:{account}:{path.name}'
                                     if warning not in self.state['warnings']:self.state['warnings'].append(warning)
                                 if getattr(e,'code',None)=='NISA_TRANSFER_OUT':
                                     self.state['warnings'].append(f'NISA_TRANSFER_UNAPPLIED:{account}:{path.name}')
                                 continue
-                            raise UpdateError('UNSUPPORTED_PDF',f'口座{account}：{path.name}\n{message}\n未確認の書類を黙って除外せず、今回の一括登録を停止しました。') from None
+                            raise UpdateError('UNSUPPORTED_PDF',f'口座{account}：{path.name}\n{message}\nPDFの破損・読取環境・整合性を確認できないため、一括登録を停止しました。原本は保持しています。') from None
                         if doc.digest!=digest:raise UpdateError('SOURCE_CHANGED','検査中にPDFが変更されました。もう一度実行してください。')
                         added,existing,already=_apply(stage,activities,account,kind,doc);known.add(digest)
                         summary.new_pdf_files+=not already

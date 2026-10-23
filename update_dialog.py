@@ -11,7 +11,7 @@ def warning_lines(warnings):
     lines=[]
     labels={'domestic':'国内株式等','foreign':'外国株式（円評価）','cash':'円の現金合計','foreign_cash':'外貨現金（円評価）','growth_remaining':'NISA成長枠','tsumitate_remaining':'NISA積立枠','usd_cash':'米ドル現金（元通貨）'}
     excluded=[x for x in warnings if x.startswith('PDF_NOT_PARSED:')]
-    if excluded:lines.append(f'未解析PDF {len(excluded)}件：原本は保持し、取引には反映しません。書類名と理由を下の一覧で確認してください。')
+    if excluded:lines.append(f'未解析PDF {len(excluded)}件：原本を保存したまま、この書類だけ集計から除外します。他の対応PDFと資産の反映は続けます。書類名と理由を下の一覧で確認してください。')
     for warning in dict.fromkeys(warnings):
         if warning=='SAVED_FILES_ONLY':lines.append('保存済みPDF・取得証跡から更新します。今回はSBIへ接続していません。')
         elif warning.startswith('NISA_TRANSFER_UNAPPLIED:'):
@@ -40,7 +40,7 @@ def warning_lines(warnings):
         elif not warning.startswith('PDF_NOT_PARSED:'):lines.append(str(warning))
     return lines
 
-def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=False):
+def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=False,force_pdf_refresh=False):
     if app.busy:return
     month=app.month.get().strip()
     try:app.store.records(month)
@@ -94,6 +94,9 @@ def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=Fa
             if online:
                 from playwright.sync_api import sync_playwright
                 from auto_login import run_one
+                if force_pdf_refresh:
+                    from functools import partial
+                    run_one=partial(run_one,force_pdf_refresh=True)
                 from gmail_auth import ensure_service
                 with sync_playwright() as pw:
                     if acquire_only:
@@ -133,7 +136,7 @@ def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=Fa
             elif kind=='review':
                 summary,proposal,prepared=data
                 status.set('登録前の最終確認：以下を確認して「登録してExcel出力」を押してください。')
-                details.insert('end',f"追加売買 {summary['new_trades']}件／配当・分割等 {summary['new_cash_or_splits']}件／残高報告 {summary['balance_reports']}件\n登録済PDF {summary['known_pdf_files']}件／対象外 {summary['excluded_pdf_files']}件\n\n")
+                details.insert('end',f"追加売買 {summary['new_trades']}件／配当・分割等 {summary['new_cash_or_splits']}件／残高報告 {summary['balance_reports']}件\n登録済PDF {summary['known_pdf_files']}件／保管のみ・集計対象外 {summary['excluded_pdf_files']}件\n\n")
                 details.insert('end',f"現在資産の全項目を確認：{summary['assets_observed']}口座／保存済み取得証跡：{summary.get('recovered_asset_accounts',0)}口座\n")
                 if summary.get('daily_asset_records'):details.insert('end',f"月末・月初の当日実測（参考記録）：{summary['daily_asset_records']}件。終値・開始時点との区別を確認してください。\n")
                 warnings=summary.get('warnings',[])

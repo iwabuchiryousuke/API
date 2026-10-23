@@ -5,12 +5,61 @@ import re,time
 from pathlib import Path
 from urllib.parse import urlparse
 from ledger import Store
-from gmail_auth import service,wait_code,recent_ids,wait_message,extract_auth_link
+from gmail_auth import GmailError,explain as explain_gmail,service,wait_code,recent_ids,wait_message,extract_auth_link
 from epost_collector import BASE,autofill_login,_login_page,wait_for_post_tab,collect
 from login_credentials import CredentialError,AuthenticationRequired
 
 class IdentityUnavailable(CredentialError):
     """A trusted login exists but its owner name is not rendered here."""
+
+
+ACQUISITION_STAGE_CODES={
+    'Edgeの起動':'EDGE_LAUNCH_FAILED',
+    'SBIサイトへの接続':'SBI_SITE_UNAVAILABLE',
+    'SBIログイン画面の確認':'LOGIN_FORM_NOT_READY',
+    'SBIログイン・メール認証':'SBI_AUTHENTICATION_FAILED',
+    '認証コード入力':'SBI_AUTHENTICATION_FAILED',
+    '認証送信ボタン':'SBI_AUTHENTICATION_FAILED',
+    'ログイン完了・名義確認':'IDENTITY_NOT_CONFIRMED',
+    '電子ポストへ移動・名義確認':'POST_NAVIGATION_FAILED',
+    'PDFの保存':'PDF_COLLECTION_FAILED',
+    'PDF取得の完了確認':'PDF_COLLECTION_FAILED',
+    '口座サマリーの取得':'SUMMARY_NOT_OBSERVED',
+    '口座サマリーへの復帰':'SUMMARY_NAVIGATION_FAILED',
+    '口座サマリー・My資産の取得':'ASSET_NOT_OBSERVED',
+    '資産取得証跡の保存':'ACQUISITION_SAVE_FAILED',
+}
+
+
+class AcquisitionError(CredentialError):
+    """Fixed acquisition code; callers need not interpret a raw browser error."""
+    def __init__(self,code,message):
+        self.code=code
+        super().__init__(message)
+
+
+def _contextual_error(error,account,stage):
+    """Keep Gmail/manual-auth classification while adding secret-free context."""
+    message=str(error)
+    if isinstance(error,GmailError):
+        prefix='['+error.code+'] '
+        if message.startswith(prefix):message=message[len(prefix):]
+        result=GmailError(error.code,f'口座{account}／{stage}：{message}')
+    elif isinstance(error,AuthenticationRequired):
+        result=AuthenticationRequired(f'口座{account}／{stage}：{message}')
+    else:
+        code=error.code if isinstance(error,AcquisitionError) else ACQUISITION_STAGE_CODES.get(stage,'ACQUISITION_FAILED')
+        result=AcquisitionError(code,f'口座{account}／{stage}：{message}')
+    result.account=account
+    result.acquisition_code=error.code if isinstance(error,AcquisitionError) else ACQUISITION_STAGE_CODES.get(stage,'ACQUISITION_FAILED')
+    return result
+
+
+def _gmail_call(function,*args,**kwargs):
+    """Classify actual API errors without forwarding server bodies or URLs."""
+    try:return function(*args,**kwargs)
+    except CredentialError:raise
+    except Exception as error:raise explain_gmail(error) from None
 
 def trusted(page):
     host=(urlparse(page.url).hostname or '').lower()
@@ -118,9 +167,9 @@ def device_screen_code(text):
 
 def device_auth(page,context,api,recipient,progress=lambda _:None,cancelled=lambda:False):
     if cancelled():raise CredentialError('中止しました。')
-    seen=recent_ids(api,time.time());started=time.time()
+    seen=_gmail_call(recent_ids,api,time.time());started=time.time()
     unique_click(page,'button',['Eメールを送信する'])
-    _,url=wait_message(api,recipient,started,extract_auth_link,seen,progress=progress,cancelled=cancelled)
+    _,url=_gmail_call(wait_message,api,recipient,started,extract_auth_link,seen,progress=progress,cancelled=cancelled)
     if cancelled():raise CredentialError('中止しました。')
     auth=context.new_page()
     try:
@@ -163,7 +212,7 @@ def open_electronic_post(page,context,progress=lambda _:None,cancelled=lambda:Fa
     from sbi_navigation import open_post_resilient
     return open_post_resilient(page,context,progress=progress,cancelled=cancelled,manual_seconds=manual_seconds)
 
-def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lambda message:None,cancelled=lambda:False,documents=True,capture_assets=True,target_dates=(),headless=False,summary_only=False):
+def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lambda message:None,cancelled=lambda:False,documents=True,capture_assets=True,target_dates=(),headless=False,summary_only=False,force_pdf_refresh=False):
     assets_observed=False
     if account not in tuple('ABCD'):raise CredentialError('SBIの自動取得は口座A～Dです。')
     if not documents and not capture_assets:raise CredentialError('取得する内容が選択されていません。')
@@ -178,9 +227,12 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
     stage='Edgeの起動'
     progress(f'口座{account}：{stage}')
     try:browser=playwright.chromium.launch(channel='msedge',headless=headless)
-    except Exception:raise CredentialError(f'口座{account}：Edgeを起動できません。Edgeとsetup_all_windows.batの実行を確認してください。') from None
+    except Exception:
+        raise _contextual_error(AcquisitionError('EDGE_LAUNCH_FAILED','Edgeを起動できません。Edgeとsetup_all_windows.batの実行を確認してください。'),account,stage) from None
     try:
-        context=browser.new_context(accept_downloads=True);page=context.new_page();page.goto('https://www.sbisec.co.jp/',wait_until='domcontentloaded')
+        context=browser.new_context(accept_downloads=True);page=context.new_page()
+        stage='SBIサイトへの接続';progress(f'口座{account}：{stage}')
+        page.goto('https://www.sbisec.co.jp/',wait_until='domcontentloaded')
         stage='SBIログイン画面の確認';progress(f'口座{account}：{stage}')
         if not autofill_login(page,context,account,automatic=True):
             from epost_collector import login_diagnostics
@@ -188,7 +240,7 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
         page=_login_page(context)
         if page is None:raise CredentialError('ログイン画面がありません。')
         stage='SBIログイン・メール認証';progress(f'口座{account}：{stage}')
-        seen=recent_ids(api,time.time());started=time.time();submit_login(page)
+        seen=_gmail_call(recent_ids,api,time.time());started=time.time();submit_login(page)
         page=page.page if hasattr(page,'page') else page
         deadline=time.monotonic()+35;otp=None;device_done=False;logged_in=False
         while time.monotonic()<deadline:
@@ -212,7 +264,7 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
         if otp:
             length=otp_length(otp)
             progress(f'口座{account}：入力欄のコード長='+str(length or '指定なし・6文字で照合'))
-            _,code=wait_code(api,recipient,started,seen,length=length,progress=lambda msg:progress(f'口座{account}：{msg}'),cancelled=cancelled)
+            _,code=_gmail_call(wait_code,api,recipient,started,seen,length=length,progress=lambda msg:progress(f'口座{account}：{msg}'),cancelled=cancelled)
             if not trusted(page):raise CredentialError('認証入力先が変わりました。')
             stage='認証コード入力';progress(f'口座{account}：{stage}')
             fill_otp(otp,code);del code
@@ -232,8 +284,10 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
                 # Some legacy summary pages omit the name. Verify the owner at
                 # e-post without downloading anything, then return to SBI.
                 progress(f'口座{account}：電子ポストの名義を確認してからサマリーへ戻ります。')
+                stage='電子ポストへ移動・名義確認'
                 post=open_electronic_post(page,context,progress=progress,cancelled=cancelled,manual_seconds=0)
                 verify_post_owner(post,owner,progress=progress,cancelled=cancelled)
+                stage='口座サマリーへの復帰'
                 page=select_asset_page(page,owner=owner,identity_verified=True,entry_url=asset_entry_url,progress=progress,cancelled=cancelled)
         if cancelled():raise CredentialError('中止しました。')
         saved=duplicate=failed=0
@@ -254,7 +308,7 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
                 progress(f'口座{account}：電子ポストの名義一致を確認しました。')
                 stage='PDFの保存';progress(f'口座{account}：{stage}')
                 try:
-                    saved,duplicate,failed=collect(post,context,account,BASE/'data'/'電子ポストPDF',progress=progress,cancelled=cancelled)
+                    saved,duplicate,failed=collect(post,context,account,BASE/'data'/'電子ポストPDF',progress=progress,cancelled=cancelled,expected_owner=owner,force_download=force_pdf_refresh)
                     progress(f'口座{account}：PDF 新規{saved}・保存済み{duplicate}・失敗{failed}。')
                     if failed:pdf_error='一部書類の収集を完了できませんでした。'
                 except Exception as error:
@@ -302,7 +356,7 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             raise CredentialError('指定日の資産表示と確認済み記録が一致しません。既存値を保持し、今回の一括反映を停止しました。診断とSBIの表示基準日を確認してください。') from None
         except Exception:
             if cancelled():raise CredentialError('中止しました。')
-            if summary_only:raise CredentialError('口座サマリーの安定した株式評価額・現金残高を確認できませんでした。自動集計の診断を確認してください。') from None
+            if summary_only:raise AcquisitionError('SUMMARY_NOT_OBSERVED','口座サマリーの安定した株式評価額・現金残高を確認できませんでした。自動集計の診断を確認してください。') from None
             assets_observed=False
             progress(f'口座{account}：資産額は未取得です。保存済みPDFの取り込みは続行します。')
         finally:
@@ -312,7 +366,9 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             stage='PDF取得の完了確認'
             retained='保存済みPDFと確認できた資産の取得証跡は保持しています。' if journal_saved else '保存済みPDFは保持しています。資産の未取得項目は診断で確認してください。'
             raise CredentialError(pdf_error+' '+retained+'台帳への一括反映は未完了です。')
-        if not documents and not status['available']:raise CredentialError('資産情報を確認できませんでした。資産画面の診断を確認してください。')
+        if not documents and not status['available']:
+            code='SUMMARY_NOT_OBSERVED' if summary_only else 'ASSET_NOT_OBSERVED'
+            raise AcquisitionError(code,'資産情報を確認できませんでした。資産画面の診断を確認してください。')
         missing=list(status['missing'])
         if not summary_only and not status['usd_cash_observed']:missing.append('usd_cash')
         return {'complete':True,'assets_observed':assets_observed,'assets_missing':missing,
@@ -325,10 +381,12 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             from navigation_diagnostics import save_navigation_failure
             try:save_navigation_failure(context,BASE/'data'/'diagnostics',account,stage,progress)
             except Exception:progress('画面移動の診断は保存できませんでした。')
-        error_type=AuthenticationRequired if isinstance(e,AuthenticationRequired) else CredentialError
-        raise error_type(f'口座{account}／{stage}：{e}') from None
-    except Exception:raise CredentialError(f'口座{account}／{stage}で停止しました。画面の読み込み・追加認証・接続状況を確認してください。') from None
-    finally:browser.close()
+        raise _contextual_error(e,account,stage) from None
+    except Exception:
+        raise _contextual_error(CredentialError('画面の読み込み・追加認証・接続状況を確認してください。'),account,stage) from None
+    finally:
+        try:browser.close()
+        except Exception:progress('Edgeの終了確認ができませんでした。残っているウィンドウを確認してください。')
 
 def main():
     from playwright.sync_api import sync_playwright

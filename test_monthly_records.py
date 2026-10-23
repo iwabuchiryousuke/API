@@ -145,9 +145,9 @@ class MonthlyRecordTests(unittest.TestCase):
         self.assertEqual(record['summary']['observed_at'],'2026-10-31T16:05:00+09:00')
         self.assertEqual(record['delay_seconds'],300)
 
-    def test_slot_calendar_and_planned_hour_must_match_role(self):
+    def test_slot_calendar_and_minute_precision_must_match_role(self):
         for change in ({'role':'other'},{'slot_date':'2026-10-30'},
-                       {'scheduled_for':'2026-10-31T15:00:00+09:00'},
+                       {'scheduled_for':'2026-10-31T15:00:01+09:00'},
                        {'comparison_month':'2026-12'},{'include_pdfs':'true'}):
             with self.subTest(change=change),self.assertRaises(MonthlyRecordError):
                 save_measurement(self.base,'C',OWNER,dict(slot(),**change),summary())

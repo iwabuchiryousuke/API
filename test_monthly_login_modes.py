@@ -8,7 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock,patch
 
-from auto_login import IdentityUnavailable,authenticated_page,run_one
+from auto_login import AcquisitionError,IdentityUnavailable,authenticated_page,run_one
+from gmail_auth import GmailError
 from login_credentials import (CredentialError,AuthenticationRequired,load_credentials,
                                credential_path,_MAGIC)
 
@@ -93,6 +94,72 @@ class MonthlyLoginModes(unittest.TestCase):
     def test_headless_summary_forwards_edge_option(self):
         self.execute(documents=False,summary_only=True,headless=True)
         self.pw.chromium.launch.assert_called_once_with(channel='msedge',headless=True)
+
+    def test_gmail_manual_code_survives_context_wrapper_and_blocks_retry(self):
+        from monthly_attention import attention_required
+        self.mocks['auto_login.recent_ids'].side_effect=GmailError('API_FORBIDDEN','Gmail APIの設定を確認してください。')
+        with self.assertRaises(GmailError) as error:self.execute(documents=False,summary_only=True)
+        self.assertEqual(error.exception.code,'API_FORBIDDEN')
+        self.assertEqual(error.exception.acquisition_code,'SBI_AUTHENTICATION_FAILED')
+        self.assertEqual(error.exception.account,'C')
+        self.assertEqual(str(error.exception).count('[API_FORBIDDEN]'),1)
+        self.assertTrue(attention_required(error.exception));self.assert_no_measurement()
+
+    def test_gmail_rate_limit_keeps_retryable_code_after_context_wrapper(self):
+        from monthly_attention import attention_required
+        self.mocks['auto_login.recent_ids'].side_effect=GmailError('API_LIMIT','時間をおいて再実行してください。')
+        with self.assertRaises(GmailError) as error:self.execute(documents=False,summary_only=True)
+        self.assertEqual(error.exception.code,'API_LIMIT')
+        self.assertFalse(attention_required(error.exception));self.assert_no_measurement()
+
+    def test_actual_mail_api_forbidden_is_classified_without_exposing_server_body(self):
+        class FakeAPIError(Exception):
+            resp=Mock(status=403)
+        self.mocks['auto_login.recent_ids'].side_effect=FakeAPIError('https://example.invalid/anonymous-token raw response')
+        with self.assertRaises(GmailError) as error:self.execute(documents=False,summary_only=True)
+        self.assertEqual(error.exception.code,'API_FORBIDDEN')
+        self.assertEqual(error.exception.acquisition_code,'SBI_AUTHENTICATION_FAILED')
+        self.assertNotIn('https://',str(error.exception));self.assertNotIn('raw response',str(error.exception))
+        self.assert_no_measurement()
+
+    def test_launch_failure_has_fixed_code_without_raw_browser_details(self):
+        self.pw.chromium.launch.side_effect=RuntimeError('anonymous browser detail https://example.invalid/session')
+        with self.assertRaises(AcquisitionError) as error:self.execute(documents=False,summary_only=True)
+        self.assertEqual(error.exception.code,'EDGE_LAUNCH_FAILED')
+        self.assertEqual(error.exception.acquisition_code,'EDGE_LAUNCH_FAILED')
+        self.assertEqual(error.exception.account,'C')
+        self.assertNotIn('https://',str(error.exception));self.assert_no_measurement()
+
+    def test_unknown_network_failure_has_fixed_stage_without_raw_url(self):
+        self.page.goto.side_effect=RuntimeError('https://example.invalid/session/anonymous')
+        with self.assertRaises(AcquisitionError) as error:self.execute(documents=False,summary_only=True)
+        self.assertEqual(error.exception.code,'SBI_SITE_UNAVAILABLE')
+        self.assertNotIn('https://',str(error.exception));self.assert_no_measurement()
+
+    def test_browser_close_failure_does_not_mask_original_gmail_classification(self):
+        self.browser.close.side_effect=RuntimeError('anonymous close failure')
+        self.mocks['auto_login.recent_ids'].side_effect=GmailError('API_FORBIDDEN','設定を確認してください。')
+        with self.assertRaises(GmailError) as error:self.execute(documents=False,summary_only=True)
+        self.assertEqual(error.exception.code,'API_FORBIDDEN')
+        self.assertIn('Edgeの終了確認',self.messages[-1]);self.assert_no_measurement()
+
+    def test_browser_close_failure_keeps_successful_summary_and_warns(self):
+        self.browser.close.side_effect=RuntimeError('anonymous close failure')
+        result=self.execute(documents=False,summary_only=True)
+        self.assertTrue(result['assets_observed']);self.assertIn('Edgeの終了確認',self.messages[-1])
+
+    def test_empty_summary_uses_summary_code_after_journal_phase(self):
+        self.summary.update(complete=False,missing=['summary_stocks','cash_total'],values={})
+        with self.assertRaises(AcquisitionError) as error:self.execute(documents=False,summary_only=True)
+        self.assertEqual(error.exception.code,'SUMMARY_NOT_OBSERVED')
+        self.assertEqual(error.exception.acquisition_code,'SUMMARY_NOT_OBSERVED')
+
+    def test_explicit_summary_conflict_code_is_not_replaced_by_generic_stage(self):
+        self.mocks['monthly_summary.capture_summary'].side_effect=AcquisitionError('SUMMARY_VALUES_CONFLICT','表示額が整合しません。')
+        with self.assertRaises(AcquisitionError) as error:self.execute(documents=False,summary_only=True)
+        self.assertEqual(error.exception.code,'SUMMARY_VALUES_CONFLICT')
+        self.assertEqual(error.exception.acquisition_code,'SUMMARY_VALUES_CONFLICT')
+        self.mocks['acquisition_journal.persist_capture'].assert_not_called()
 
     def test_partial_summary_keeps_unknown_stock_in_missing_list(self):
         self.summary.update(complete=False,missing=['summary_stocks'],values={'cash_total':200})
@@ -192,6 +259,7 @@ class MonthlyLoginModes(unittest.TestCase):
         result=self.execute(capture_assets=False)
         self.assertTrue(result['pdf_collected'])
         self.assertEqual(self.mocks['auto_login.open_electronic_post'].call_args.kwargs['manual_seconds'],180)
+        self.assertEqual(self.mocks['auto_login.collect'].call_args.kwargs['expected_owner'],OWNER)
         self.assert_no_measurement()
 
     def test_pdf_only_headless_has_no_manual_navigation_window(self):

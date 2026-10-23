@@ -127,7 +127,7 @@ def _slot(value,strict=False):
     expected=first-timedelta(days=1) if role=='month-end' else first if role=='month-start' else None
     planned=_stamp(value['scheduled_for'])
     include=value.get('include_pdfs',False)
-    if day!=expected or planned.date()!=day or planned.time().replace(tzinfo=None)!=time(16):raise _error('月末・月初の日付と16時の予定が一致しません。')
+    if day!=expected or planned.date()!=day or planned.second or planned.microsecond:raise _error('月末・月初の日付と分単位の予定時刻が一致しません。')
     if not isinstance(include,bool):raise _error('PDF取得の予定設定を確認できません。')
     return dict(role=role,scheduled_for=planned.isoformat(),slot_date=day.isoformat(),
                 comparison_month=first.strftime('%Y-%m'),include_pdfs=include)
@@ -168,7 +168,7 @@ def _record(account,owner,slot,summary,attempt_id):
     observed=_stamp(summary['observed_at']);planned=_stamp(slot['scheduled_for'])
     delay=(observed-planned).total_seconds()
     if observed.date().isoformat()!=slot['slot_date']:raise _error('別の日の取得値を予定日の記録として保存できません。')
-    if delay<0:raise _error('予定の16時より前の取得値を完了記録として保存できません。')
+    if delay<0:raise _error('予定時刻より前の取得値を完了記録として保存できません。')
     data={'schema':_SCHEMA,'version':1,'account':account,'owner':owner,'attempt_id':attempt_id,
           'slot':slot,'summary':summary,'timing':'near-schedule' if delay<=1800 else 'late',
           'delay_seconds':delay,'source':SOURCE,'displayed_at_is_valuation':False}
@@ -347,6 +347,20 @@ def select_measurement(base,account,slot,owner):
     return _choose(load_measurements(base,accounts=(account,),owners={account:owner}),account,slot)
 
 
+def _choose_calendar(records,account,slot):
+    # An edited time creates a different occurrence. Within one occurrence,
+    # keep its first complete attempt. Across occurrences, show the latest
+    # coherent complete observation instead of combining its individual fields.
+    found=[value for value in records if value['account']==account and
+           all(value['slot'][key]==slot[key] for key in ('role','slot_date','comparison_month'))]
+    groups={value['slot']['scheduled_for'] for value in found}
+    candidates=[_choose(found,account,dict(slot,scheduled_for=planned)) for planned in groups]
+    if not candidates:return None
+    return min(candidates,key=lambda value:(not value['summary']['complete'],
+        len(value['summary']['missing']),-(_stamp(value['summary']['observed_at']).timestamp()),
+        value['delay_seconds'],value['attempt_id']))
+
+
 def comparison(base,month,owners):
     """Compare the same owner's prior month-end and current month-start slots.
 
@@ -356,14 +370,18 @@ def comparison(base,month,owners):
     first=_month(month);selected,owners=_selection(None,owners)
     if owners is None:raise _error('比較には現在の口座名義設定が必要です。')
     records=load_measurements(base,accounts=selected,owners=owners);slots={}
+    from schedule_settings import load_settings,ScheduleSettingsError
+    try:configured={entry['kind']:entry['time'] for entry in load_settings(base)['schedules'] if entry['kind']!='once'}
+    except (ScheduleSettingsError,OSError):raise _error('月次予約の現在の時刻設定を確認できません。') from None
     for role,day in (('month-end',first-timedelta(days=1)),('month-start',first)):
-        slots[role]=dict(role=role,scheduled_for=datetime.combine(day,time(16),JST).isoformat(),
+        hour,minute=map(int,configured.get(role,'16:00').split(':'))
+        slots[role]=dict(role=role,scheduled_for=datetime.combine(day,time(hour,minute),JST).isoformat(),
             slot_date=day.isoformat(),comparison_month=first.strftime('%Y-%m'),include_pdfs=role=='month-start')
     result={'month':first.strftime('%Y-%m'),'source':SOURCE,
-            'note':'差額は同じ口座の表示額の増減であり、運用損益ではありません。予定16時の確定残高を示すものではありません。',
+            'note':'差額は同じ口座の表示額の増減であり、運用損益ではありません。予定時刻の確定残高を示すものではありません。未取得側の予定時刻は現在の予約設定です。',
             'accounts':{}}
     for account in selected:
-        before=_choose(records,account,slots['month-end']);after=_choose(records,account,slots['month-start'])
+        before=_choose_calendar(records,account,slots['month-end']);after=_choose_calendar(records,account,slots['month-start'])
         bv=before['summary']['values'] if before else {};av=after['summary']['values'] if after else {}
         deltas={};missing=[]
         for key in AMOUNTS:
@@ -384,5 +402,5 @@ def comparison(base,month,owners):
             'month_end':before,'month_start':after,'deltas':deltas,'missing':missing,'status':status,'complete':complete,
             'timing':{role:record['timing'] if record else 'missing' for role,record in selected_records.items()},
             'observed_at':{role:record['summary']['observed_at'] if record else None for role,record in selected_records.items()},
-            'scheduled_for':{role:slots[role]['scheduled_for'] for role in slots}}
+            'scheduled_for':{role:record['slot']['scheduled_for'] if record else slots[role]['scheduled_for'] for role,record in selected_records.items()}}
     return result
