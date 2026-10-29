@@ -1,7 +1,8 @@
+"""Archived v3.5 report geometry regressions; v3.6 has a separate contract."""
 import base64,json,unittest
 from unittest.mock import patch
 import test_regression as fixture
-from report_model import build,reporting_code
+from report_model import build_legacy as build,reporting_code
 from gmail_auth import extract_code,extract_auth_link
 from auto_login import device_screen_code,trusted
 from login_credentials import CredentialError

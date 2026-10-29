@@ -119,7 +119,9 @@ class MonthlyRunnerSafety(MonthlyRunnerFixture):
                 code = main(['--dry-run'])
             self.assertEqual(code, 0)
             self.assertEqual(list(Path(directory).iterdir()), [])
-        self.assertTrue(json.loads(output.getvalue())['planning_only'])
+        preview=json.loads(output.getvalue())
+        self.assertTrue(preview['planning_only']);self.assertTrue(preview['retired'])
+        self.assertEqual(preview['next'],[])
 
     def test_comparison_csv_escapes_formula_labels_and_keeps_numeric_values(self):
         import csv

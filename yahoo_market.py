@@ -59,3 +59,35 @@ def previous_close(code,month,factory=None):
     value=number(series.iloc[-1]);day=series.index[-1].date()
     if value is None or not start<=day<end or (end-day).days>7:raise ValueError('月末近辺の終値を確認できません。')
     return {'close':value,'close_date':day.isoformat(),'price_source':f'Yahoo Finance via yfinance / {code}.T / unadjusted close'}
+
+
+def month_closes(code,month,factory=None,now=None):
+    """One public query for prior-month last close and literal day-one close."""
+    if not re.fullmatch(r'[0-9][0-9A-Z]{3}',str(code)):raise ValueError('国内コードを指定してください。')
+    first=date.fromisoformat(month+'-01');prior=first-timedelta(days=1);start=prior.replace(day=1)
+    jst=timezone(timedelta(hours=9));moment=now or datetime.now(jst)
+    if moment.tzinfo is None:raise ValueError('現在時刻にタイムゾーンを指定してください。')
+    moment=moment.astimezone(jst)
+    if first>moment.date():raise ValueError('将来月の終値は取得できません。')
+    if factory is None:
+        import yfinance as yf
+        factory=yf.Ticker
+    data=factory(str(code)+'.T').history(start=start.isoformat(),end=(first+timedelta(days=1)).isoformat(),
+        auto_adjust=False,actions=False,raise_errors=True,timeout=15)
+    if data.empty or 'Close' not in data:raise ValueError('対象月の終値を確認できません。')
+    bars=[]
+    for stamp,value in data['Close'].dropna().items():
+        day=stamp.date();amount=number(value)
+        if not isinstance(value,bool) and amount is not None and amount>0 and start<=day<=first:bars.append((day,amount))
+    result={};source=f'Yahoo Finance via yfinance / {code}.T / unadjusted close'
+    older=[(day,amount) for day,amount in bars if day<first]
+    if older:
+        day,amount=max(older)
+        if 0<=(prior-day).days<=7:result.update(close=amount,close_date=day.isoformat(),price_source=source)
+    # Today's unfinished bar is not a closing-price observation.
+    ready=first<moment.date() or (moment.hour,moment.minute)>=(16,0)
+    exact=[(day,amount) for day,amount in bars if day==first]
+    if ready and len(exact)==1:
+        day,amount=exact[0]
+        result.update(month_start_close=amount,month_start_close_date=day.isoformat(),month_start_price_source=source)
+    return result

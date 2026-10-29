@@ -8,7 +8,7 @@ GAIN='[Red]+#,##0;[Blue]-#,##0;0'
 def short(value):
     return {'母(雅美)':'母','父(慶太)':'父','買':'B','売':'S','税還付':'税還','NISA(成)':'N-成','NISA(積)':'N-積','NISA（成）':'N-成','NISA（積）':'N-積','N(成)':'N-成','N(積)':'N-積','特定':'特'}.get(value,value)
 
-def build(store,activities,month='',management=False,today=None):
+def build_legacy(store,activities,month='',management=False,today=None):
     model=legacy_build(store,activities,month,management)
     t,d=model['sheets'][:2]
     original={(c['r'],c['c']):dict(c) for c in t['cells']}
@@ -196,3 +196,9 @@ def build(store,activities,month='',management=False,today=None):
         for c,value in enumerate(values,12):put(t,r,c,value)
     model['version']='3.5.11'  
     return model
+
+
+def build(store,activities,month='',management=False,today=None):
+    """The v3.6 layout requested in the current workbook specification."""
+    from report_v36 import build as current_build
+    return current_build(store,activities,month,management,today)

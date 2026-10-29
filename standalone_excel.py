@@ -23,9 +23,11 @@ def write_model(model,outdir,management=False):
     target=outdir/f'{"管理見本" if management else "売買記録"}_{model["as_of"]}_{datetime.now():%Y%m%d_%H%M%S_%f}.xlsx'
     temporary=target.with_suffix('.tmp')
     styles={};xfs=[];custom_formats={}
+    calendar_red=any(c.get('fill')=='FFC7CE' for sh in model['sheets'] for c in sh['cells']) or any(
+        rule.get('dxf')==2 for sh in model['sheets'] for rule in sh.get('conditional_formats',[]))
     def style(cell):
         typ=cell['k'].removeprefix('formula_');font=1 if typ in ('number','date','percent','code') else 0
-        fill={None:0,'DDEBF7':2,'FCE4D6':3,'E7E6E6':4,'FFF2CC':5}.get(cell.get('fill'),0)
+        fill={None:0,'DDEBF7':2,'FCE4D6':3,'E7E6E6':4,'FFF2CC':5,'FFC7CE':6}.get(cell.get('fill'),0)
         custom=cell.get('format')
         if custom and custom not in custom_formats:custom_formats[custom]=167+len(custom_formats)
         fmt=custom_formats[custom] if custom else {'number':164,'date':165,'percent':166}.get(typ,0)
@@ -49,21 +51,24 @@ def write_model(model,outdir,management=False):
                 else:content=f'<is><t xml:space="preserve">{escape(clean(v))}</t></is>'
             attr=' t="inlineStr"' if content.startswith('<is>') else ''
             rows.setdefault(r,[]).append((c['c'],f'<c r="{ref}" s="{st}"{attr}>{content}</c>'))
-        data=''.join(f'<row r="{r}" ht="{s.get("header_height",44.1) if r==1 else s.get("row_height",44.1)}" customHeight="1">'+''.join(v for _,v in sorted(cells))+'</row>' for r,cells in sorted(rows.items()))
+        data=''.join(f'<row r="{r}" ht="{s.get("row_heights",{}).get(r,s.get("row_heights",{}).get(str(r),s.get("header_height",44.1) if r==1 else s.get("row_height",44.1)))}" customHeight="1">'+''.join(v for _,v in sorted(cells))+'</row>' for r,cells in sorted(rows.items()))
         cols=''.join(f'<col min="{c}" max="{c}" width="{w}" customWidth="1" hidden="{int(int(c) in s.get("hidden_columns",[]))}"/>' for c,w in s['widths'].items())
         filt=f'<autoFilter ref="{s["filter"]}"/>' if s.get('filter') else ''
         merges=('<mergeCells count="'+str(len(s.get('merges',[])))+'">'+''.join('<mergeCell ref="'+m+'"/>' for m in s.get('merges',[]))+'</mergeCells>') if s.get('merges') else ''
         conditions=''.join(f'<conditionalFormatting sqref="{rule["range"]}"><cfRule type="expression" dxfId="{rule["dxf"]}" priority="{i}" stopIfTrue="1"><formula>{escape(rule["formula"])}</formula></cfRule></conditionalFormatting>' for i,rule in enumerate(s.get('conditional_formats',[]),1))
         drawing='<drawing r:id="chart1"/>' if s.get('chart') else ''
-        sheets.append(f'<worksheet xmlns="{NS}" xmlns:r="{OFF[:-1]}"><sheetViews><sheetView workbookViewId="0" showGridLines="1"/></sheetViews><sheetFormatPr defaultRowHeight="24"/><cols>{cols}</cols><sheetData>{data}</sheetData>{filt}{merges}{conditions}<pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>{drawing}</worksheet>')
-    fills=''.join(f'<fill><patternFill patternType="solid"><fgColor rgb="FF{x}"/><bgColor indexed="64"/></patternFill></fill>' for x in ('DDEBF7','FCE4D6','E7E6E6','FFF2CC'))
+        pane='<pane xSplit="2" ySplit="1" topLeftCell="C2" activePane="bottomRight" state="frozen"/>' if s.get('freeze')=='C2' else ''
+        view=(f'<sheetView workbookViewId="0" showGridLines="1">{pane}</sheetView>' if pane else '<sheetView workbookViewId="0" showGridLines="1"/>')
+        sheets.append(f'<worksheet xmlns="{NS}" xmlns:r="{OFF[:-1]}"><sheetViews>{view}</sheetViews><sheetFormatPr defaultRowHeight="24"/><cols>{cols}</cols><sheetData>{data}</sheetData>{filt}{merges}{conditions}<pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>{drawing}</worksheet>')
+    fills=''.join(f'<fill><patternFill patternType="solid"><fgColor rgb="FF{x}"/><bgColor indexed="64"/></patternFill></fill>' for x in (('DDEBF7','FCE4D6','E7E6E6','FFF2CC')+(('FFC7CE',) if calendar_red else ())))
     custom_xml=''.join(f'<numFmt numFmtId="{ident}" formatCode={quoteattr(fmt)}/>' for fmt,ident in custom_formats.items())
-    stylesxml=f'<styleSheet xmlns="{NS}"><numFmts count="{3+len(custom_formats)}"><numFmt numFmtId="164" formatCode={quoteattr(NUM)}/><numFmt numFmtId="165" formatCode="yyyy/mm/dd"/><numFmt numFmtId="166" formatCode="0.00%;[Red]-0.00%;0.00%"/>{custom_xml}</numFmts><fonts count="2"><font><sz val="12"/><name val="ＭＳ Ｐゴシック"/></font><font><sz val="12"/><name val="Times New Roman"/></font></fonts><fills count="6"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>{fills}</fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right/><top style="thick"><color rgb="FF000000"/></top><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf fontId="0" fillId="0" borderId="0" numFmtId="0"/></cellStyleXfs><cellXfs count="{len(xfs)}">{"".join(xfs)}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="2"><dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFCE4D6"/><bgColor indexed="64"/></patternFill></fill></dxf><dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/><bgColor indexed="64"/></patternFill></fill></dxf></dxfs></styleSheet>'
+    red_dxf='<dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>' if calendar_red else ''
+    stylesxml=f'<styleSheet xmlns="{NS}"><numFmts count="{3+len(custom_formats)}"><numFmt numFmtId="164" formatCode={quoteattr(NUM)}/><numFmt numFmtId="165" formatCode="yyyy/mm/dd"/><numFmt numFmtId="166" formatCode="0.00%;[Red]-0.00%;0.00%"/>{custom_xml}</numFmts><fonts count="2"><font><sz val="12"/><name val="ＭＳ Ｐゴシック"/></font><font><sz val="12"/><name val="Times New Roman"/></font></fonts><fills count="{7 if calendar_red else 6}"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>{fills}</fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right/><top style="thick"><color rgb="FF000000"/></top><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf fontId="0" fillId="0" borderId="0" numFmtId="0"/></cellStyleXfs><cellXfs count="{len(xfs)}">{"".join(xfs)}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="{3 if calendar_red else 2}"><dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFCE4D6"/><bgColor indexed="64"/></patternFill></fill></dxf><dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/><bgColor indexed="64"/></patternFill></fill></dxf>{red_dxf}</dxfs></styleSheet>'
     try:
         with ZipFile(temporary,'w',ZIP_DEFLATED) as z:
             types=[('/xl/workbook.xml','sheet.main'),('/xl/styles.xml','styles')]+[(f'/xl/worksheets/sheet{i}.xml','worksheet') for i in range(1,len(sheets)+1)]
             overrides=''.join(f'<Override PartName="{p}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.{t}+xml"/>' for p,t in types)
-            if management:overrides+='<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>'
+            if any(sh.get('chart') for sh in model['sheets']):overrides+='<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>'
             z.writestr('[Content_Types].xml',f'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>{overrides}</Types>')
             z.writestr('_rels/.rels',f'<Relationships xmlns="{REL}"><Relationship Id="rId1" Type="{OFF}officeDocument" Target="xl/workbook.xml"/></Relationships>')
             wb=''.join(f'<sheet name={quoteattr(s["name"])} sheetId="{i}" state="{"hidden" if s.get("hidden") else "visible"}" r:id="rId{i}"/>' for i,s in enumerate(model['sheets'],1))

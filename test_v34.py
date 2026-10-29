@@ -1,9 +1,10 @@
+"""Archived v3.5 report geometry regressions; v3.6 has a separate contract."""
 import unittest,json,base64
 from pathlib import Path
 from unittest.mock import patch,MagicMock
 from decimal import Decimal
 import test_regression as fixture
-from report_model import build
+from report_model import build_legacy as build
 from cost_basis import calculate,display_average
 from security_names import save
 from asset_snapshots import capture_page,snapshots,extract_observations,capture_history

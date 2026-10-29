@@ -1,5 +1,6 @@
 from contextlib import ExitStack
-from datetime import date
+from datetime import date,datetime,timedelta,timezone
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -11,7 +12,7 @@ from zipfile import ZipFile
 from activity import Activities
 from acquisition_targets import target_dates
 from asset_snapshots import merge_exact
-from ledger import LedgerError,Store
+from ledger import LedgerError,Store,Snapshot
 from login_credentials import CredentialError
 from sbi_views import _jst_now,save_observation
 from update_dialog import warning_lines
@@ -33,16 +34,23 @@ class OneButtonUpdate(unittest.TestCase):
 
     def capture(self,pw,account,stage,**kwargs):
         self.assertTrue(kwargs['documents']);self.assertTrue(kwargs['capture_assets'])
-        self.assertEqual(kwargs['target_dates'],('2026-09-30','2026-10-01'))
+        self.assertTrue(kwargs['current_only']);self.assertEqual(kwargs['target_dates'],())
         self.assertIsNotNone(kwargs['gmail_session'])
-        for index,day in enumerate(kwargs['target_dates']):
-            merge_exact(stage,account,day,dict(domestic=100+index,foreign=200+index,cash=300+index,foreign_cash=400+index,growth_remaining=500+index,tsumitate_remaining=600+index))
         save_observation(stage,account,'口座サマリー','',dict(cash_total=350,growth_remaining={'year':2026,'remaining':500},tsumitate_remaining={'year':2026,'remaining':600}))
-        save_observation(stage,account,'My資産','',dict(domestic=100,foreign=200,cash=300,bank=50,foreign_cash=400,usd_cash=10))
+        save_observation(stage,account,'口座(外貨建)','',dict(usd_cash=10))
         return dict(complete=True,assets_observed=True,assets_missing=[],saved=1,duplicate=0)
 
-    def test_one_button_acquires_four_and_applies_all_five_with_dated_excel_cells(self):
+    def test_one_button_acquires_four_and_applies_all_five_with_current_excel_contract(self):
         self.add_pending_pdfs();acquired=[];reviews=[]
+        store=Store(self.base/'data')
+        trade=dict(trade_date='2026-10-02',settlement_date='2026-10-06',name='Example Security',code='9900',market='東証',side='買',
+                   custody='特定',tax_class='',quantity='10',price='100',fees='0',tax='0',settlement_amount='1000')
+        raw=json.dumps([trade]).encode()
+        store.import_snapshot('A',Snapshot(raw,'example.csv',hashlib.sha256(raw).hexdigest(),'2026-10-02','2026-10-02',[trade]))
+        merge_exact(store,'A','2026-09-30',dict(cash=999,growth_remaining=123))
+        before=store.records()
+        old=store.db.execute("SELECT payload FROM asset_snapshots WHERE account='A' AND as_of='2026-09-30'").fetchone()[0]
+        store.close()
         def capture(pw,account,stage,**kwargs):
             acquired.append(account);return self.capture(pw,account,stage,**kwargs)
         def review(summary,proposal,prepared):
@@ -51,19 +59,30 @@ class OneButtonUpdate(unittest.TestCase):
             self.assertEqual({row['account'] for row in proposal if row['kind']=='対象外'},set('ABCDE'))
             self.assertFalse(any(w.startswith('ASSET_DATE_INCOMPLETE:') for w in summary['warnings']))
             self.assertTrue(any(w.startswith('PDF_NOT_PARSED:') for w in summary['warnings']))
+            self.assertEqual(summary['daily_asset_records'],0)
             return True
         auth=Mock(return_value=(Mock(),'recipient@example.test'))
-        with patch('update_workflow.classify',side_effect=LedgerError('対象外：外国株式の通知（未解析）。原本保持。')) as classify:
-            result=collect_and_apply(self.base,'2026-10',Mock(),auth,capture,review)
+        captured_at=datetime(2026,10,29,16,15,tzinfo=timezone(timedelta(hours=9)))
+        with patch('update_workflow.classify',side_effect=LedgerError('対象外：外国株式の通知（未解析）。原本保持。')) as classify, \
+             patch('sbi_views._jst_now',return_value=captured_at):
+            result=collect_and_apply(self.base,'2026-10',Mock(),auth,capture,review,current_only=True)
         self.assertEqual(acquired,list('ABCD'));self.assertEqual(auth.call_count,4)
         self.assertEqual(classify.call_count,5);self.assertEqual(len(reviews),1)
         self.assertEqual(result['summary']['assets_observed'],4)
         with ZipFile(result['output']) as z:
             root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
         ns={'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-        cells={cell.attrib['r']:cell.findtext('s:v',namespaces=ns) for cell in root.findall('.//s:c',ns)}
-        self.assertEqual(cells['M2'],'100.0');self.assertEqual(cells['M12'],'101.0')
-        self.assertEqual(cells['R2'],'500.0');self.assertEqual(cells['R12'],'501.0')
+        cells={cell.attrib['r']:cell for cell in root.findall('.//s:c',ns)}
+        for ref in ('K2','L2','M2'):self.assertIsNotNone(cells[ref].find('s:f',ns))
+        self.assertEqual(cells['O1'].findtext('s:v',namespaces=ns),str((captured_at.date()-date(1899,12,30)).days))
+        for ref,value in (('P2',500),('Q2',600),('R2',350),('S2',10)):
+            self.assertEqual(float(cells[ref].findtext('s:v',namespaces=ns)),value)
+        self.assertNotIn('M12',cells)
+        store=Store(self.base/'data')
+        try:
+            self.assertEqual(store.records(),before)
+            self.assertEqual(store.db.execute("SELECT payload FROM asset_snapshots WHERE account='A' AND as_of='2026-09-30'").fetchone()[0],old)
+        finally:store.close()
 
     def test_selected_pdf_action_never_applies_a_ledger(self):
         auth=Mock(return_value=(Mock(),'recipient@example.test'))

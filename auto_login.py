@@ -27,6 +27,7 @@ ACQUISITION_STAGE_CODES={
     '口座サマリーの取得':'SUMMARY_NOT_OBSERVED',
     '口座サマリーへの復帰':'SUMMARY_NAVIGATION_FAILED',
     '口座サマリー・My資産の取得':'ASSET_NOT_OBSERVED',
+    '円・米ドル現金とNISA枠の取得':'ASSET_NOT_OBSERVED',
     '資産取得証跡の保存':'ACQUISITION_SAVE_FAILED',
 }
 
@@ -212,11 +213,12 @@ def open_electronic_post(page,context,progress=lambda _:None,cancelled=lambda:Fa
     from sbi_navigation import open_post_resilient
     return open_post_resilient(page,context,progress=progress,cancelled=cancelled,manual_seconds=manual_seconds)
 
-def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lambda message:None,cancelled=lambda:False,documents=True,capture_assets=True,target_dates=(),headless=False,summary_only=False,force_pdf_refresh=False):
+def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lambda message:None,cancelled=lambda:False,documents=True,capture_assets=True,target_dates=(),headless=False,summary_only=False,force_pdf_refresh=False,current_only=False):
     assets_observed=False
     if account not in tuple('ABCD'):raise CredentialError('SBIの自動取得は口座A～Dです。')
     if not documents and not capture_assets:raise CredentialError('取得する内容が選択されていません。')
     if summary_only and (documents or not capture_assets):raise CredentialError('口座サマリー専用取得ではPDF取得を同時に指定できません。')
+    if current_only and (summary_only or not capture_assets or target_dates):raise CredentialError('現在残高の取得では過去日・サマリー専用取得を同時に指定できません。')
     if cancelled():raise CredentialError('中止しました。')
     api,recipient=gmail_session or service(BASE/'data',account)
     store=asset_store or Store(BASE/'data')
@@ -272,15 +274,15 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             submit_otp(page,otp,progress=lambda msg:progress(f'口座{account}：{msg}'),cancelled=cancelled)
             (page.page if hasattr(page,'page') else page).wait_for_timeout(2000)
         stage='ログイン完了・名義確認';progress(f'口座{account}：{stage}')
-        from sbi_views import landing,verify_post_owner,capture_account,select_asset_page
+        from sbi_views import landing,verify_post_owner,capture_account,select_asset_page,ObservationConflict
         page=landing(context,cancelled=cancelled)
         # A post navigation may replace this very Page. Keep its observed SBI
         # entry only in memory so we can return within the same login context.
         asset_entry_url=page.url if trusted(page) else None
         if not documents:
-            try:page=authenticated_page(context,owner,timeout=5 if summary_only else 30,cancelled=cancelled)
+            try:page=authenticated_page(context,owner,timeout=5 if summary_only or current_only else 30,cancelled=cancelled)
             except IdentityUnavailable:
-                if not summary_only:raise
+                if not (summary_only or current_only):raise
                 # Some legacy summary pages omit the name. Verify the owner at
                 # e-post without downloading anything, then return to SBI.
                 progress(f'口座{account}：電子ポストの名義を確認してからサマリーへ戻ります。')
@@ -319,7 +321,7 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             if pdf_error:raise CredentialError(pdf_error+' 保存済みPDFは保持しています。台帳への反映は行っていません。')
             return {'complete':True,'pdf_collected':documents,'assets_observed':False,'saved':saved,'duplicate':duplicate}
         # Preserve PDFs before navigating unrelated asset pages.
-        stage='口座サマリーの取得' if summary_only else '口座サマリー・My資産の取得';progress(f'口座{account}：{stage}')
+        stage='円・米ドル現金とNISA枠の取得' if current_only else '口座サマリーの取得' if summary_only else '口座サマリー・My資産の取得';progress(f'口座{account}：{stage}')
         store=asset_store or Store(BASE/'data')
         from asset_snapshots import KEYS,HistoricalConflict
         status={'available':[],'missing':list(KEYS)+['growth_remaining','tsumitate_remaining'],'usd_cash_observed':False}
@@ -328,9 +330,14 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
         capture_started=_jst_now().isoformat()
         journal_saved=False
         monthly_summary=None
+        current_status=None
         try:
             page=select_asset_page(page,owner=owner,identity_verified=True,entry_url=asset_entry_url,progress=progress,cancelled=cancelled)
-            if summary_only:
+            if current_only:
+                from current_asset_reader import capture_current
+                current_status=capture_current(page,store,account,owner=owner,identity_verified=True,progress=progress,cancelled=cancelled)
+                status=current_status
+            elif summary_only:
                 from monthly_summary import capture_summary
                 monthly_summary=capture_summary(page,store,account,owner=owner,identity_verified=True,progress=progress,cancelled=cancelled)
                 status={'complete':monthly_summary['complete'],'available':[key for key in ('summary_stocks','cash_total') if monthly_summary['values'].get(key) is not None],
@@ -350,6 +357,11 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             if journal_saved:progress(f'口座{account}：確認できた資産の取得証跡を保存しました。一括反映の確認後に台帳へ登録します。')
         except CredentialError:
             raise
+        except ObservationConflict:
+            if current_only:raise AcquisitionError('SUMMARY_VALUES_CONFLICT','現在の現金・NISA枠に整合しない表示があります。金額を推定せず停止しました。') from None
+            if summary_only:raise AcquisitionError('SUMMARY_NOT_OBSERVED','口座サマリーの安定した表示を確認できませんでした。') from None
+            assets_observed=False
+            progress(f'口座{account}：資産額は未取得です。保存済みPDFの取り込みは続行します。')
         except JournalError:
             raise CredentialError('取得済み資産の証跡を保存できません。空き容量と診断を確認してください。台帳への一括反映は停止しました。') from None
         except HistoricalConflict:
@@ -357,6 +369,8 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
         except Exception:
             if cancelled():raise CredentialError('中止しました。')
             if summary_only:raise AcquisitionError('SUMMARY_NOT_OBSERVED','口座サマリーの安定した株式評価額・現金残高を確認できませんでした。自動集計の診断を確認してください。') from None
+            if current_only:
+                status={'complete':False,'available':[],'missing':['cash_total','usd_cash','growth_remaining','tsumitate_remaining'],'usd_cash_observed':False}
             assets_observed=False
             progress(f'口座{account}：資産額は未取得です。保存済みPDFの取り込みは続行します。')
         finally:
@@ -370,9 +384,9 @@ def run_one(playwright,account,asset_store=None,gmail_session=None,progress=lamb
             code='SUMMARY_NOT_OBSERVED' if summary_only else 'ASSET_NOT_OBSERVED'
             raise AcquisitionError(code,'資産情報を確認できませんでした。資産画面の診断を確認してください。')
         missing=list(status['missing'])
-        if not summary_only and not status['usd_cash_observed']:missing.append('usd_cash')
+        if not summary_only and not current_only and not status['usd_cash_observed']:missing.append('usd_cash')
         return {'complete':True,'assets_observed':assets_observed,'assets_missing':missing,
-                'usd_cash_observed':status['usd_cash_observed'],'pdf_collected':documents,'saved':saved,'duplicate':duplicate,'monthly_summary':monthly_summary}
+                'usd_cash_observed':status['usd_cash_observed'],'pdf_collected':documents,'saved':saved,'duplicate':duplicate,'monthly_summary':monthly_summary,'current_status':current_status}
     except CredentialError as e:
         if 'post' in locals():
             from post_identity import save_failure_evidence

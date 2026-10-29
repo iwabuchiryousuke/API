@@ -129,7 +129,14 @@ class WindowsTaskPlanning(unittest.TestCase):
         self.assertIn('$taskUser -ne $currentSid',source)
         self.assertLess(source.index("if($Action -eq 'uninstall')"),source.index("if([TimeZoneInfo]::Local.Id"))
         self.assertIn('$folder.DeleteTask($name,0)',source)
-        self.assertNotIn('GetTasks(',source)
+        retirement=source.split("if($Action -eq 'retire') {",1)[1].split(' $existing=@{}',1)[0]
+        other=source.replace(retirement,'')
+        self.assertNotIn('GetTasks(',other)
+        self.assertIn('GetTasks(1)',retirement)
+        self.assertIn('$taskUser -ne $currentSid',retirement)
+        self.assertIn('$scopePrefix',retirement)
+        self.assertIn('$description -eq',retirement)
+        self.assertIn('$task.Name -eq',retirement)
 
     def test_batch_wrappers_preserve_exit_and_unattended_worker_has_no_pause(self):
         base=Path(wt.__file__).parent

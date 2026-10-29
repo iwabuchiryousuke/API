@@ -8,12 +8,12 @@ from secure_settings import load,save
 BASE=Path(__file__).resolve().parent
 
 def run():
-    root=tk.Tk();root.title('配当予定・前月終値の確認');root.geometry('900x700')
+    root=tk.Tk();root.title('配当予定・月末と1日の終値');root.geometry('900x800')
     year=date.today().year;data=load_research(BASE/'data',year);data.setdefault('year',year);facts=data.setdefault('securities',{})
     body=ttk.Frame(root,padding=20);body.pack(fill='both',expand=True)
     ttk.Label(body,text='無料取得はYahoo Finance（yfinance）に統一。参考値とPDFの実入金を区別し、欠損は推測しません。').pack(anchor='w')
     selected=tk.StringVar();box=ttk.Combobox(body,textvariable=selected,values=list(facts),state='normal');box.pack(anchor='w',pady=8)
-    fields={};labels={'name':'銘柄名','rights':'権利付き最終日（表示用）','payments':'支払日（表示用）','earnings':'本決算発表日（表示用）','dps':'今年権利分DPS（分割後換算）','close':'前月最終営業日終値（円）','close_date':'株価基準日 YYYY-MM-DD','source':'公式情報のURL・確認日','status':'確認メモ'}
+    fields={};labels={'name':'銘柄名','rights':'権利付き最終日（表示用）','payments':'支払日（表示用）','earnings':'本決算発表日（表示用）','dps':'今年権利分DPS（分割後換算）','close':'前月最終営業日終値（円）','close_date':'前月終値の日付 YYYY-MM-DD','month_start_close':'当月1日終値（円）','month_start_close_date':'当月1日の株価日 YYYY-MM-DD','source':'公式情報のURL・確認日','status':'確認メモ'}
     frame=ttk.Frame(body);frame.pack(fill='x')
     for r,(key,label) in enumerate(labels.items()):
         ttk.Label(frame,text=label).grid(row=r,column=0,sticky='w',pady=3);v=tk.StringVar();fields[key]=v;ttk.Entry(frame,textvariable=v,width=70).grid(row=r,column=1,pady=3)
@@ -39,10 +39,13 @@ def run():
             code=selected.get().strip().upper()
             if not re.fullmatch(r'[0-9A-Z]{4}',code):raise ValueError('コードは4文字です。')
             f={k:v.get().strip() for k,v in fields.items()}
-            for k in ('dps','close'):
+            for k in ('dps','close','month_start_close'):
                 f[k]=float(f[k].replace(',','')) if f[k] else None
                 if f[k] is not None and (not math.isfinite(f[k]) or f[k]<0):raise ValueError('DPS・終値は0以上の有限数値です。')
             if f['close_date']:date.fromisoformat(f['close_date'])
+            if f['month_start_close_date']:
+                stamp=date.fromisoformat(f['month_start_close_date'])
+                if stamp.day!=1:raise ValueError('当月1日終値の日付は実際の1日を指定してください。休場日は空欄にします。')
             if not f['source']:raise ValueError('出典を入力してください。')
             events=json.loads(plans.get('1.0','end'))
             if not isinstance(events,list):raise ValueError('予定明細はJSON配列です。')
@@ -55,7 +58,7 @@ def run():
         except Exception as e:messagebox.showerror('入力確認',str(e))
     def update_yahoo(prices_only=False):
         try:
-            from yahoo_market import fetch,merge_reference,previous_close
+            from yahoo_market import fetch,merge_reference,month_closes
             from security_names import load as names_load
             import re,threading,queue,time
             names=names_load(BASE/'data')
@@ -63,7 +66,7 @@ def run():
             if not codes:raise ValueError('銘柄コードを先に登録してください。')
             month=None
             if prices_only:
-                month=simpledialog.askstring('基準月','例：2026-10 → 9月最終営業日の未調整終値',initialvalue=date.today().strftime('%Y-%m'))
+                month=simpledialog.askstring('基準月','例：2026-10 → 9月最終営業日と10月1日の終値。1日が休場日なら空欄。',initialvalue=date.today().strftime('%Y-%m'))
                 if not month:return
                 date.fromisoformat(month+'-01')
             for w in buttons.winfo_children():w.configure(state='disabled')
@@ -71,7 +74,7 @@ def run():
             def worker():
                 good={};failed=[]
                 for c in codes:
-                    try:good[c]=previous_close(c,month) if prices_only else fetch(c,year)
+                    try:good[c]=month_closes(c,month) if prices_only else fetch(c,year)
                     except Exception:failed.append(c)
                     time.sleep(.5)
                 results.put((good,failed))
@@ -90,7 +93,7 @@ def run():
         except Exception as e:messagebox.showerror('更新停止',str(e))
     def prices():update_yahoo(True)
     def dividends():update_yahoo(False)
-    buttons=ttk.Frame(body);buttons.pack(pady=12);ttk.Button(buttons,text='公開情報を保存',command=commit).pack(side='left',padx=8);ttk.Button(buttons,text='無料で前月終値を更新',command=prices).pack(side='left',padx=8)
+    buttons=ttk.Frame(body);buttons.pack(pady=12);ttk.Button(buttons,text='公開情報を保存',command=commit).pack(side='left',padx=8);ttk.Button(buttons,text='月末・1日の終値を更新',command=prices).pack(side='left',padx=8)
     ttk.Button(buttons,text='無料で配当参考情報を取得',command=dividends).pack(side='left',padx=8)
     if facts:box.current(0);choose()
     root.mainloop()

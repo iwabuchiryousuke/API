@@ -579,7 +579,7 @@ def run_monthly(base, *, role='auto', now=None, authenticate=None, acquire=None,
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='設定した日本時間の予約に従い、口座サマリー・PDFを取得します。')
+    parser = argparse.ArgumentParser(description='定期取得は終了しました。取得はアプリの4口座まとめ取得から行います。')
     parser.add_argument('--role', choices=ROLES, default='auto')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--scheduled', action='store_true')
@@ -590,38 +590,12 @@ def main(argv=None):
     parser.add_argument('--schedule-revision', type=int, help='登録時の予約の版番号。古いタスクを停止します。')
     parser.add_argument('--dry-run', action='store_true', help='予定表示だけ。設定やブラウザーへアクセスしません。')
     args = parser.parse_args(argv)
-    if args.show_browser and not args.test:parser.error('--show-browserは--testと組み合わせてください。')
-    if args.include_pdfs and not args.test:parser.error('--include-pdfsは--testと組み合わせてください。予約は保存したPDF設定に従います。')
-    if args.schedule_revision is not None and not args.schedule_id:parser.error('予約の版番号には予約IDが必要です。')
-    if args.test and args.schedule_id:parser.error('テスト取得は予約IDを指定せず実行してください。')
+    # v3.6 intentionally retires all background/monthly acquisition. This gate
+    # also protects an old installed task before the GUI can remove it.
     if args.dry_run:
-        from schedule_settings import load_settings, get_schedule
-        settings=load_settings(BASE,create=False)
-        slot=(due_configured_schedule(get_schedule(BASE,args.schedule_id),_now(),args.schedule_revision)
-              if args.schedule_id else due_slot(_now(),args.role))
-        print(json.dumps(dict(slot=slot,next=configured_next_slots(settings,_now()),
-                             planning_only=True),ensure_ascii=False,indent=2))
-        return 0
-    if os.name != 'nt':
-        print('実際の自動取得は、連携設定を保存した同じWindowsユーザーで実行してください。')
-        return 2
-    schedule_id=args.schedule_id
-    # Old task actions must also obey persisted changes/deletions until Windows
-    # has been synchronized with the new revision-bound task definitions.
-    if args.scheduled and not schedule_id:
-        from schedule_settings import get_schedule
-        candidates=(args.role,) if args.role!='auto' else ('month-end','month-start')
-        schedule_id=next((key for key in candidates if
-            due_configured_schedule(get_schedule(BASE,key),_now()) is not None),None)
-        if schedule_id is None:
-            print('無効・削除済み、対象日以外、または予定時刻前のため取得しません。');return 0
-    result = run_monthly(BASE,role=args.role,test=args.test,include_pdfs=args.include_pdfs,
-                         show_browser=args.show_browser,schedule_id=schedule_id,
-                         schedule_revision=args.schedule_revision,
-                         progress=lambda message: print(message,flush=True))
-    print(json.dumps({k: result.get(k) for k in ('status', 'exit_code', 'error', 'run_path', 'comparison_csv')},
-                     ensure_ascii=False, indent=2))
-    return result['exit_code']
+        print(json.dumps({'retired':True,'planning_only':True,'next':[]},ensure_ascii=False,indent=2));return 0
+    print('定期・指定日時の自動取得は終了しました。取得はアプリの「4口座をまとめて取得」から実行してください。今回はSBIへ接続していません。')
+    return 0
 
 
 if __name__ == '__main__':

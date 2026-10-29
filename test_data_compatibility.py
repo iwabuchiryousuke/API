@@ -1,7 +1,8 @@
-"""Anonymous fixtures protect the supplied Excel contract and upgrade data safety.
+"""Anonymous fixtures protect historical v3.5 reports and upgrade data safety.
 
-The workbook hashes were generated with the unmodified uploaded v3.5.11 app;
-ZIP container timestamps are excluded. No user documents or credentials are used.
+Legacy workbook hashes were generated with the uploaded v3.5.11 app. The active
+v3.6 layout has separate contract tests. ZIP timestamps are excluded; no user
+documents or credentials are used.
 """
 import hashlib
 import json
@@ -14,7 +15,7 @@ from zipfile import ZipFile
 from activity import Activities
 from asset_snapshots import save
 from ledger import Snapshot, Store
-from report_model import build
+from report_model import build_legacy
 from standalone_excel import write_model
 from update_workflow import Cancelled, Workflow
 
@@ -111,23 +112,24 @@ BASELINE_OBSERVED_MANAGEMENT = {'[Content_Types].xml': '1db0e6a9f5ec1fc1a43f97cb
 
 
 class ExcelContract(unittest.TestCase):
-    def test_original_excel_format_and_formulas_are_preserved(self):
+    """Keep the historical v3.5 writer contract available for old reports."""
+    def test_legacy_v35_excel_format_and_formulas_are_preserved(self):
         with tempfile.TemporaryDirectory() as temp:
             store, activities = seed_fixture(temp)
             try:
-                model = build(store, activities, '2026-10',
+                model = build_legacy(store, activities, '2026-10',
                               today=date(2026, 10, 22))
                 path = write_model(model, Path(temp) / 'output')
                 self.assertEqual(workbook_hashes(path), BASELINE_OOXML)
             finally:
                 store.close()
 
-    def test_observed_assets_and_management_workbook_keep_original_format(self):
+    def test_legacy_v35_observed_management_workbook_keeps_original_format(self):
         with tempfile.TemporaryDirectory() as temp:
             store, activities = seed_fixture(temp)
             try:
                 seed_observations(store)
-                model = build(store, activities, '2026-10', management=True,
+                model = build_legacy(store, activities, '2026-10', management=True,
                               today=date(2026, 10, 22))
                 path = write_model(model, Path(temp) / 'output', management=True)
                 self.assertEqual(workbook_hashes(path), BASELINE_OBSERVED_MANAGEMENT)

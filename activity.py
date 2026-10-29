@@ -61,6 +61,15 @@ class Activities:
         for row in self.db.execute('SELECT id,payload FROM activities WHERE account=? AND kind=? AND event_date=?',
                                    (account,event['type'],event['date'])):
             other=json.loads(row['payload'])
+            if (event['type'] in ('税還付','利息') and other.get('manual')
+                    and not other.get('code') and not event.get('code')
+                    and other.get('currency','JPY')==event.get('currency','JPY')=='JPY'):
+                try:same=Decimal(str(other.get('amount',other.get('net'))))==Decimal(str(event.get('amount',event.get('net'))))
+                except Exception:same=False
+                if same:
+                    if matching_id is not None and matching_id!=row['id']:
+                        raise LedgerError('同じ口座・日付・金額の手動入金が複数あります。原本との対応を確認してください。')
+                    matching_id=row['id'];continue
             if event['type']=='株式分割' and other['code']==event['code'] and other.get('manual'):
                 same=all(Decimal(str(other[k]))==Decimal(str(event[k])) for k in ('before','added','after'))
                 same=same and Decimal(str(other['ratio_new']))/Decimal(str(other['ratio_old']))==Decimal(str(event['ratio_new']))/Decimal(str(event['ratio_old']))
@@ -174,14 +183,22 @@ class Activities:
         for e in activities:
             if e['type']=='株式分割':movements.append((e['date'],0,e['account'],e['code'],e['name'],e))
         movements.sort(key=lambda v:(v[0],v[1]))
+        def stock_count(value):
+            try:
+                number=Decimal(str(value))
+                if isinstance(value,bool) or not number.is_finite() or number<0 or number!=number.to_integral_value():raise ValueError()
+                return int(number)
+            except Exception:raise LedgerError('保有株数・分割株数を確認できません。元の取引・分割記録を確認してください。') from None
         state=defaultdict(lambda:{'quantity':0,'warning':False,'name':''})
         for day,priority,account,code,name,record in movements:
             p=state[(account,code)];p['name']=name
             if priority==0:
-                if p['quantity']!=record['before']:p['warning']=True
-                p['quantity']+=record['added']
+                before=stock_count(record['before']);added=stock_count(record['added'])
+                if p['quantity']!=before:p['warning']=True
+                if 'after' in record and before+added!=stock_count(record['after']):p['warning']=True
+                p['quantity']+=added
             else:
-                p['quantity']+=int(Decimal(record['quantity']))*(1 if record['side']=='買' else -1)
+                p['quantity']+=stock_count(record['quantity'])*(1 if record['side']=='買' else -1)
                 if p['quantity']<0:p['warning']=True
         accounts={a['id']:a['label'] for a in self.store.accounts()}
         return [dict(account=a,account_label=accounts[a],code=c,**v) for (a,c),v in sorted(state.items())]

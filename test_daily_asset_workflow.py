@@ -1,4 +1,4 @@
-"""Calendar-boundary observations reach existing Excel cells only after review."""
+"""Legacy calendar evidence remains intact; v3.6 never relabels it current."""
 from datetime import datetime,timedelta,timezone
 import json
 from pathlib import Path
@@ -54,7 +54,7 @@ class DailyAssetWorkflow(unittest.TestCase):
         for day,hour,value in [('2026-09-30','09:00',10),('2026-09-30','23:00',11),('2026-10-01','09:00',20),('2026-10-01','17:00',21)]:
             capture_batch(self.base,day,hour,value)
 
-    def test_last_monthend_and_first_day1_observations_use_existing_cells_with_explicit_basis(self):
+    def test_legacy_boundary_records_remain_stored_without_populating_current_snapshot(self):
         seen=[]
         def review(summary,proposal,prepared):
             seen.append(summary)
@@ -63,17 +63,19 @@ class DailyAssetWorkflow(unittest.TestCase):
             self.assertTrue(any('当日実測' in line and '終値' in line for line in warnings))
             self.assertTrue(any('ASSET_DATE_INCOMPLETE:A:' in code for code in summary['warnings']))
             cells,ns=excel_cells(prepared)
-            self.assertEqual(cells['M2'].findtext('s:v',namespaces=ns),'11.0')
-            self.assertEqual(cells['M12'].findtext('s:v',namespaces=ns),'20.0')
-            self.assertEqual(cells['R2'].findtext('s:v',namespaces=ns),'511.0')
-            self.assertEqual(cells['R12'].findtext('s:v',namespaces=ns),'520.0')
-            note=''.join(cells['T2'].itertext())
-            self.assertIn('当日実測',note);self.assertIn('23:00',note);self.assertIn('ではない',note)
+            self.assertIn('保有株数',''.join(cells['K1'].itertext()))
+            self.assertIn('平均取得単価',''.join(cells['L1'].itertext()))
+            self.assertIn('確定損益',''.join(cells['M1'].itertext()))
+            self.assertIsNone(cells['O1'].findtext('s:v',namespaces=ns))
+            for row in range(2,7):
+                for column in 'PQRS':self.assertIsNone(cells[column+str(row)].findtext('s:v',namespaces=ns))
+            self.assertNotIn('M12',cells)
             return True
         result=apply_saved(self.base,'2026-10',review)
         self.assertEqual(len(seen),1);self.assertTrue(result['output'].is_file())
         store=Store(self.base/'data');rows=snapshots(store)
         self.assertEqual(rows['A','2026-09-30']['domestic'],11)
+        self.assertEqual(rows['A','2026-10-01']['domestic'],20)
         self.assertFalse(exact_fields(rows['A','2026-09-30']))
         self.assertEqual(len(store.records()),0);store.close()
         again=apply_saved(self.base,'2026-10',lambda *args:True)
@@ -112,8 +114,9 @@ class DailyAssetWorkflow(unittest.TestCase):
             payload=store.db.execute("SELECT payload FROM asset_snapshots WHERE account='A'").fetchone()[0];store.close()
             def review(summary,proposal,prepared):
                 self.assertTrue(any('ASSET_DATE_LEGACY_ESTIMATE:A:' in code for code in summary['warnings']))
-                cells,_=excel_cells(prepared)
-                self.assertIn('指定日残高は未確認',''.join(cells['T2'].itertext()))
+                cells,ns=excel_cells(prepared)
+                self.assertIsNone(cells['O1'].findtext('s:v',namespaces=ns))
+                self.assertIsNone(cells['R2'].findtext('s:v',namespaces=ns))
                 return True
             apply_saved(base,'2026-10',review)
             store=Store(base/'data')

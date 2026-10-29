@@ -4,7 +4,6 @@ from contextlib import redirect_stdout
 import io
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from auto_login import AcquisitionError
@@ -233,25 +232,20 @@ class ConfiguredRunner(MonthlyRunnerFixture):
         self.assertEqual(self.calls,[('asset','A'),('pdf','A')])
         self.assertEqual(self.protected_rows(),self.before)
 
-    def test_old_native_role_actions_obey_saved_deletion_and_edited_time(self):
+    def test_all_retired_cli_actions_stop_before_settings_auth_or_worker_access(self):
         from monthly_runner import main
-        self.current=datetime(2026,10,31,16,7,tzinfo=JST)
-        with patch('monthly_runner.BASE',self.base), \
-             patch('monthly_runner.os',SimpleNamespace(name='nt')), \
-             patch('monthly_runner._now',side_effect=lambda:self.current), \
-             patch('monthly_runner.run_monthly',return_value={'status':'completed','exit_code':0}) as worker, \
-             redirect_stdout(io.StringIO()):
-            self.assertEqual(main(['--role','month-end','--scheduled']),0)
-            self.assertEqual(worker.call_args.kwargs['schedule_id'],'month-end')
-            worker.reset_mock()
-            delete_schedule(self.base,'month-end')
-            self.assertEqual(main(['--role','month-end','--scheduled']),0)
+        absent=self.base/'retired-unconfigured-application'
+        with patch('monthly_runner.BASE',absent), \
+             patch('monthly_runner.Store',side_effect=AssertionError('Retired CLI must not open a ledger')), \
+             patch('schedule_settings.get_schedule',side_effect=AssertionError('Retired CLI must not read preferences')), \
+             patch('gmail_auth.service',side_effect=AssertionError('Retired CLI must not authenticate')), \
+             patch('monthly_runner.run_monthly') as worker:
+            for args in ([],['--role','month-end','--scheduled'],['--role','month-start','--scheduled'],
+                         ['--role','auto','--scheduled'],
+                         ['--schedule-id','probe-once','--schedule-revision','1','--scheduled'],
+                         ['--test','--show-browser','--include-pdfs']):
+                with self.subTest(args=args),redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(main(args),0)
+                    self.assertIn('SBIへ接続していません',output.getvalue())
             worker.assert_not_called()
-            old=get_schedule(self.base,'month-end')
-            save_schedule(self.base,dict(old,enabled=True,deleted=False,time='17:00'),
-                          expected_revision=old['revision'])
-            self.assertEqual(main(['--role','auto','--scheduled']),0)
-            worker.assert_not_called()
-            self.current=self.current.replace(hour=17)
-            self.assertEqual(main(['--role','auto','--scheduled']),0)
-            self.assertEqual(worker.call_args.kwargs['schedule_id'],'month-end')
+        self.assertFalse(absent.exists())

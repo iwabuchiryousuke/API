@@ -5,15 +5,18 @@ import tkinter as tk
 from update_workflow import Workflow,Cancelled
 from version import APP_VERSION
 
-PHASES={'ACCOUNT_FAILED':'この口座の収集失敗・次の口座へ','AUTHORIZING':'Gmail連携を確認中','COLLECTING':'SBIから収集中','CHECKING_PDF':'PDFを検査中','PREPARING_EXCEL':'Excelを作成中','COMMITTING':'確認済みデータを登録中','DATA_COMMITTED':'登録完了・Excelを配置中','COMPLETED':'完了','COMPLETED_WITH_WARNINGS':'完了（未取得項目あり）','FAILED':'停止','CANCELLED':'中止','OUTPUT_PENDING':'登録完了・出力待ち'}
+PHASES={'ACCOUNT_FAILED':'この口座の収集失敗・次の口座へ','AUTHORIZING':'Gmail連携を確認中','COLLECTING':'SBIから収集中','CHECKING_PDF':'PDFを検査中','REFERENCE_PRICES':'月末・1日の終値を確認中','PREPARING_EXCEL':'Excelを作成中','COMMITTING':'確認済みデータを登録中','DATA_COMMITTED':'登録完了・Excelを配置中','COMPLETED':'完了','COMPLETED_WITH_WARNINGS':'完了（未取得項目あり）','FAILED':'停止','CANCELLED':'中止','OUTPUT_PENDING':'登録完了・出力待ち'}
 
 def warning_lines(warnings):
     lines=[]
-    labels={'domestic':'国内株式等','foreign':'外国株式（円評価）','cash':'円の現金合計','foreign_cash':'外貨現金（円評価）','growth_remaining':'NISA成長枠','tsumitate_remaining':'NISA積立枠','usd_cash':'米ドル現金（元通貨）'}
+    labels={'domestic':'国内株式等','foreign':'外国株式（円評価）','cash':'円の現金合計','cash_total':'円の現金合計','foreign_cash':'外貨現金（円評価）','growth_remaining':'NISA成長枠','tsumitate_remaining':'NISA積立枠','usd_cash':'米ドル現金（元通貨）'}
     excluded=[x for x in warnings if x.startswith('PDF_NOT_PARSED:')]
     if excluded:lines.append(f'未解析PDF {len(excluded)}件：原本を保存したまま、この書類だけ集計から除外します。他の対応PDFと資産の反映は続けます。書類名と理由を下の一覧で確認してください。')
     for warning in dict.fromkeys(warnings):
         if warning=='SAVED_FILES_ONLY':lines.append('保存済みPDF・取得証跡から更新します。今回はSBIへ接続していません。')
+        elif warning=='REFERENCE_PRICES_UNAVAILABLE':lines.append('月末・1日の終値の一部を確認できませんでした。確認できない価格は空欄にし、PDF・現金・NISAの反映は続けます。')
+        elif warning=='REFERENCE_CACHE_CONFLICT':lines.append('確認中に株価の参照データが変更されたため、変更済みの元データを保持しました。このExcelには今回確認できた終値を使用しています。')
+        elif warning=='REFERENCE_CACHE_UNSAVED':lines.append('今回の終値の参照データを保存できませんでした。金融データの登録は完了しています。次回は価格を再確認してください。')
         elif warning.startswith('NISA_TRANSFER_UNAPPLIED:'):
             _,account,_=warning.split(':',2)
             lines.append('口座'+account+'：NISA払出通知の口座区分移動・取得価額は未反映です。原本と既存記録を確認してください。')
@@ -40,7 +43,7 @@ def warning_lines(warnings):
         elif not warning.startswith('PDF_NOT_PARSED:'):lines.append(str(warning))
     return lines
 
-def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=False,force_pdf_refresh=False):
+def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=False,force_pdf_refresh=False,current_only=False):
     if app.busy:return
     month=app.month.get().strip()
     try:app.store.records(month)
@@ -110,8 +113,18 @@ def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=Fa
                             session=ensure_service(base/'data',account,message)
                             return run_one(pw,account,stage,gmail_session=session,progress=message,cancelled=cancel.is_set,documents=False,target_dates=flow.target_dates)
                         result=flow.run(month,collect=asset_collect,review=review,accounts=accounts,include_saved_pdfs=False)
-                    else:result=collect_and_apply(base,month,pw,ensure_service,run_one,review,progress=progress,message=message,cancelled=cancel.is_set)
-            else:result=apply_saved(base,month,review,progress=progress,cancelled=cancel.is_set)
+                    else:
+                        reference_refresh=None
+                        if current_only:
+                            def reference_refresh(stage,selected_month):
+                                from datetime import datetime,timedelta,timezone
+                                from market_data import refresh_month_closes
+                                target=selected_month or datetime.now(timezone(timedelta(hours=9))).strftime('%Y-%m')
+                                codes={row.get('code','') for row in stage.records(selected_month)}
+                                message('前月末・当月1日の公開終値を確認しています。未確認の価格は空欄にします。')
+                                return refresh_month_closes(stage.directory,codes,target,cancelled=cancel.is_set)
+                        result=collect_and_apply(base,month,pw,ensure_service,run_one,review,progress=progress,message=message,cancelled=cancel.is_set,current_only=current_only,reference_refresh=reference_refresh)
+            else:result=apply_saved(base,month,review,progress=progress,cancelled=cancel.is_set,current_only=current_only)
             events.put(('done',result))
         except Cancelled:events.put(('cancelled',None))
         except Exception as e:
@@ -137,7 +150,8 @@ def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=Fa
                 summary,proposal,prepared=data
                 status.set('登録前の最終確認：以下を確認して「登録してExcel出力」を押してください。')
                 details.insert('end',f"追加売買 {summary['new_trades']}件／配当・分割等 {summary['new_cash_or_splits']}件／残高報告 {summary['balance_reports']}件\n登録済PDF {summary['known_pdf_files']}件／保管のみ・集計対象外 {summary['excluded_pdf_files']}件\n\n")
-                details.insert('end',f"現在資産の全項目を確認：{summary['assets_observed']}口座／保存済み取得証跡：{summary.get('recovered_asset_accounts',0)}口座\n")
+                if current_only:details.insert('end',f"今回の円・米ドル現金とNISA2枠を確認：{summary['assets_observed']}口座。未取得の項目は空欄です。\n")
+                else:details.insert('end',f"現在資産の全項目を確認：{summary['assets_observed']}口座／保存済み取得証跡：{summary.get('recovered_asset_accounts',0)}口座\n")
                 if summary.get('daily_asset_records'):details.insert('end',f"月末・月初の当日実測（参考記録）：{summary['daily_asset_records']}件。終値・開始時点との区別を確認してください。\n")
                 warnings=summary.get('warnings',[])
                 if warnings:

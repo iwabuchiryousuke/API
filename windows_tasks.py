@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 from schedule_settings import (JST, ScheduleSettingsError, defaults, load_settings,
                                settings_digest, validate_settings)
@@ -215,7 +216,7 @@ def _save_registration(base, settings, logon_mode, status):
 PS_SOURCE=r'''param(
  [Parameter(Mandatory=$true)][string]$AppRoot,
  [Parameter(Mandatory=$true)][string]$PythonExe,
- [ValidateSet('install','status','uninstall','dry-run','bootstrap')][string]$Action='dry-run',
+ [ValidateSet('install','status','uninstall','dry-run','bootstrap','retire')][string]$Action='dry-run',
  [ValidateSet('InteractiveToken','Password')][string]$LogonMode='InteractiveToken',
  [Parameter(Mandatory=$true)][string]$ConfigFile
 )
@@ -270,6 +271,46 @@ try {
  $service=New-Object -ComObject 'Schedule.Service'
  $service.Connect()
  $folder=$service.GetFolder('\')
+ if($Action -eq 'retire') {
+  $phase='旧自動取得タスクの停止・解除'
+  $scopes=@($payload.RetireRoots)
+  if($scopes.Count -lt 1 -or $scopes.Count -gt 16) { throw '旧予約の対象を確認できません。' }
+  $removed=@{}
+  foreach($scope in $scopes) {
+   if($scope -isnot [string] -or [string]::IsNullOrWhiteSpace($scope)) { throw '旧予約の場所を確認できません。' }
+   $scopeRoot=[IO.Path]::GetFullPath($scope)
+   if($scopeRoot.Length -gt [IO.Path]::GetPathRoot($scopeRoot).Length) { $scopeRoot=$scopeRoot.TrimEnd([char[]]@('\','/')) }
+   $scopeHash=[BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($scopeRoot))).Replace('-','').ToLowerInvariant().Substring(0,12)
+   $scopePrefix='SBI_FamilyTrades_'+$currentSid.Replace('-','_')+'_'+$scopeHash
+   foreach($task in @($folder.GetTasks(1))) {
+    if($removed.ContainsKey($task.Name) -or -not $task.Name.StartsWith($scopePrefix+'_',[StringComparison]::Ordinal)) { continue }
+    $definition=$task.Definition
+    $taskUser=$definition.Principal.UserId
+    if($taskUser -ne $currentSid -and $taskUser -ne $currentName) { continue }
+    $description=[string]$definition.RegistrationInfo.Description
+    $owned=$false
+    foreach($legacy in @(@{Role='month-end';Suffix='MonthEnd16JST'},@{Role='month-start';Suffix='MonthStart16JST'})) {
+     if($description -eq ('SBI Family Trades monthly; app='+$scopeRoot+'; role='+$legacy.Role) -and
+        $task.Name -eq ($scopePrefix+'_'+$legacy.Suffix)) { $owned=$true }
+    }
+    $acquisitionPrefix='SBI Family Trades acquisition; app='+$scopeRoot+'; schedule='
+    if($description.StartsWith($acquisitionPrefix,[StringComparison]::Ordinal)) {
+     $scheduleId=$description.Substring($acquisitionPrefix.Length)
+     if($scheduleId -match '^[a-z][a-z0-9_-]{0,63}$') {
+      $suffix=if($scheduleId -eq 'month-end') {'MonthEnd16JST'} elseif($scheduleId -eq 'month-start') {'MonthStart16JST'} else {'Once_'+$scheduleId}
+      if($task.Name -eq ($scopePrefix+'_'+$suffix)) { $owned=$true }
+     }
+    }
+    if(-not $owned) { continue }
+    $task.Enabled=$false
+    if($task.State -eq 4) { $task.Stop(0) }
+    $folder.DeleteTask($task.Name,0)
+    $removed[$task.Name]=$true
+   }
+  }
+  Write-Output ('旧自動取得の停止・解除：'+$removed.Count+'件。台帳・PDF・設定・履歴は削除していません。')
+  exit 0
+ }
  $existing=@{}
  foreach($item in $roles) {
   $name=$prefix+'_'+$item.Suffix
@@ -438,7 +479,7 @@ def _run_windows_action(action,base=None,logon_mode='InteractiveToken',role='mon
     if logon_mode not in ('InteractiveToken','Password'):raise ValueError('対応するログオン方式ではありません。')
     if action=='dry-run':
         print(json.dumps(build_configured_plan(root,logon_mode=logon_mode),ensure_ascii=False,indent=2));return 0
-    if action not in ('install','status','uninstall','test','sync','bootstrap'):raise ValueError('対応する操作ではありません。')
+    if action not in ('install','status','uninstall','test','sync','bootstrap','retire'):raise ValueError('対応する操作ではありません。')
     if (platform_name or os.name)!='nt':raise RuntimeError('Windows上の、SBI・Gmailを設定した同じユーザーで実行してください。')
     if role not in ('month-end','month-start'):raise ValueError('roleはmonth-end/month-startです。')
     if action=='test':
@@ -446,8 +487,15 @@ def _run_windows_action(action,base=None,logon_mode='InteractiveToken',role='mon
         if show_browser:command.append('--show-browser')
         if include_pdfs:command.append('--include-pdfs')
         return runner(command,cwd=str(root),check=False).returncode
+    from schedule_retirement import is_retired,prepare_retirement,mark_native_result
+    if action in ('install','sync','bootstrap') and root.is_dir() and is_retired(root):
+        print('この版では旧自動取得を終了しています。予約を再作成せず、4口座の取得ボタンを使用してください。');return 0
     persistent=root.is_dir()
-    settings=load_settings(root,create=action in ('install','sync','bootstrap','uninstall')) if persistent else defaults()
+    retirement=prepare_retirement(root) if action=='retire' else None
+    try:settings=load_settings(root,create=action in ('install','sync','bootstrap','uninstall')) if persistent else defaults()
+    except (OSError,ValueError):
+        if action!='retire':raise
+        settings=defaults() # Native retirement uses verified descriptions, not guessed preferences.
     if action=='uninstall' and persistent:
         from schedule_settings import delete_schedule
         # The user's deletion intent must survive a native-task removal error.
@@ -475,17 +523,23 @@ def _run_windows_action(action,base=None,logon_mode='InteractiveToken',role='mon
             temporary=Path(stream.name);stream.write(PS_SOURCE.encode('utf-8-sig'));stream.flush();os.fsync(stream.fileno())
         with tempfile.NamedTemporaryFile(prefix='family_acquisition_plan_',suffix='.json',delete=False) as stream:
             configuration=Path(stream.name)
-            stream.write(json.dumps(_registration_payload(plan),ensure_ascii=False).encode('utf-8'))
+            payload=_registration_payload(plan)
+            if retirement is not None:payload['RetireRoots']=retirement['app_roots']
+            stream.write(json.dumps(payload,ensure_ascii=False).encode('utf-8'))
             stream.flush();os.fsync(stream.fileno())
         code=runner(_powershell_command(temporary,root,native_action,logon_mode,configuration),cwd=str(root),check=False).returncode
-        if persistent and action!='status':
+        if action=='retire':
+            mark_native_result(root,'removed' if code==0 else 'failed',
+                               retirement['error_code'] if code==0 else 'NATIVE_REMOVAL_FAILED')
+        elif persistent and action!='status':
             if action=='bootstrap' and code==PASSWORD_REGISTRATION_REQUIRED:
                 _save_registration(root,settings,'Password','needs-registration')
             else:
                 _save_registration(root,settings,logon_mode,'registered' if code==0 else 'failed')
         return code
     except OSError:
-        if persistent and action!='status':_save_registration(root,settings,logon_mode,'failed')
+        if action=='retire':mark_native_result(root,'failed','PROCESS_START_FAILED')
+        elif persistent and action!='status':_save_registration(root,settings,logon_mode,'failed')
         raise
     finally:
         if temporary is not None:temporary.unlink(missing_ok=True)
@@ -497,6 +551,19 @@ def run_windows_action(action,base=None,logon_mode='InteractiveToken',role='mont
     root=Path(base or Path(__file__).resolve().parent).resolve()
     options=dict(base=root,logon_mode=logon_mode,role=role,runner=runner,
                  platform_name=platform_name,show_browser=show_browser,include_pdfs=include_pdfs)
+    if action=='retire' and (platform_name or os.name)=='nt' and root.is_dir():
+        from schedule_retirement import prepare_retirement
+        prepare_retirement(root) # Stop intent precedes lock contention/native cleanup.
+        # Startup cleanup runs in its own process. Briefly wait for an older
+        # registration to release its lock, then retire what it actually left.
+        for attempt in range(30):
+            try:
+                with _registration_lock(root):return _run_windows_action(action,**options)
+            except RegistrationBusy:
+                if attempt<29:time.sleep(.2)
+        from schedule_retirement import mark_native_result
+        mark_native_result(root,'failed','REGISTRATION_BUSY')
+        return 1
     if (action in ('install','sync','bootstrap','uninstall') and
             (platform_name or os.name)=='nt' and root.is_dir()):
         with _registration_lock(root):
@@ -508,12 +575,15 @@ def main(argv=None):
     for stream in (sys.stdout,sys.stderr):
         if hasattr(stream,'reconfigure'):stream.reconfigure(encoding='utf-8',errors='replace')
     parser=argparse.ArgumentParser(description='SBI家族売買記録の月末・月初・指定日時のWindows予約。初期動作は確認表示だけです。')
-    parser.add_argument('--action',choices=('dry-run','install','status','uninstall','test','sync','bootstrap'),default='dry-run')
+    parser.add_argument('--action',choices=('dry-run','install','status','uninstall','test','sync','bootstrap','retire'),default='dry-run')
     parser.add_argument('--logon-mode',choices=('InteractiveToken','Password'),default='InteractiveToken')
     parser.add_argument('--role',choices=('month-end','month-start'),default='month-end')
     parser.add_argument('--show-browser',action='store_true',help='明示テストでブラウザーを表示します。')
     parser.add_argument('--include-pdfs',action='store_true',help='明示テストでPDFも保存します。')
     args=parser.parse_args(argv)
+    if args.action in ('install','sync','bootstrap','test'):
+        print('定期・指定日時の自動取得は終了しました。取得はアプリの4口座まとめ取得から実行してください。Windows予約は作成していません。')
+        return 0
     try:return run_windows_action(args.action,logon_mode=args.logon_mode,role=args.role,
                                   show_browser=args.show_browser,include_pdfs=args.include_pdfs)
     except RegistrationBusy as error:

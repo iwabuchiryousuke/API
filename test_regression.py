@@ -82,7 +82,7 @@ class Regression(unittest.TestCase):
         with ZipFile(p) as z:
             for n in z.namelist():
                 if n.endswith('.xml') or n.endswith('.rels'):ET.fromstring(z.read(n))
-            self.assertNotIn(b'<pane',z.read('xl/worksheets/sheet1.xml'));self.assertIn(b'Times New Roman',z.read('xl/styles.xml'))
+            self.assertIn(b'topLeftCell="C2"',z.read('xl/worksheets/sheet1.xml'));self.assertIn(b'Times New Roman',z.read('xl/styles.xml'))
     def test_balance_owner_required(self):
         from types import SimpleNamespace
         doc=SimpleNamespace(kind='balance_pdf',owner='別の名義')

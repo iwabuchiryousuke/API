@@ -1,3 +1,4 @@
+"""Archived v3.5 report geometry regressions; v3.6 has a separate contract."""
 import unittest,json,tempfile,sys,types
 from pathlib import Path
 from unittest.mock import patch,MagicMock
@@ -9,7 +10,7 @@ from gmail_auth import connect,client_config,verify_mailbox,ensure_service,Gmail
 from family_profile import OWNERS,MAILBOXES,configure
 from date_highlights import dates_in,months_after,rules_for
 from standalone_excel import write_model
-from report_model import build
+from report_model import build_legacy as build
 from update_workflow import Workflow,UpdateError
 from login_credentials import CredentialError
 

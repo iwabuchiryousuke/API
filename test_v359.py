@@ -1,3 +1,4 @@
+"""Archived v3.5 report geometry regressions; v3.6 has a separate contract."""
 import unittest,tempfile,json,subprocess,io,shutil
 from pathlib import Path
 from unittest.mock import Mock,patch
@@ -6,7 +7,7 @@ from epost_collector import collect,DISCOVER
 from ledger import Store
 from activity import Activities
 from asset_snapshots import save,snapshots,capture_month_start
-from report_model import build
+from report_model import build_legacy as build
 
 class AcquisitionTests(unittest.TestCase):
  def test_report_survives_failure_and_escapes_html(self):
