@@ -63,8 +63,8 @@ class DailyAssetWorkflow(unittest.TestCase):
             self.assertTrue(any('当日実測' in line and '終値' in line for line in warnings))
             self.assertTrue(any('ASSET_DATE_INCOMPLETE:A:' in code for code in summary['warnings']))
             cells,ns=excel_cells(prepared)
-            self.assertIn('保有株数',''.join(cells['K1'].itertext()))
-            self.assertIn('平均取得単価',''.join(cells['L1'].itertext()))
+            self.assertEqual('保有数',''.join(cells['K1'].itertext()))
+            self.assertEqual('平均単価',''.join(cells['L1'].itertext()))
             self.assertIn('確定損益',''.join(cells['M1'].itertext()))
             self.assertIsNone(cells['O1'].findtext('s:v',namespaces=ns))
             for row in range(2,7):

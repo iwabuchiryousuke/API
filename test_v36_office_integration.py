@@ -114,8 +114,8 @@ class ActualOfficeWorkbook(unittest.TestCase):
         before={table:sorted(tuple(row) for row in store.db.execute('SELECT * FROM '+table))
                 for table in ('accounts','imports','trades','evidence','activities','current_acquisitions')}
         cls.model=build(store,activities,'2026-10',today=date(2026,10,29))
-        if any(sheet.get('freeze')!='C2' or sheet.get('header_height',0)<38 for sheet in cls.model['sheets']):
-            raise AssertionError('Production readable-layout styling was not applied')
+        if any(sheet.get('freeze') is not None or sheet.get('header_height')!=20.1 for sheet in cls.model['sheets']):
+            raise AssertionError('The uploaded row height and unfrozen view were not preserved')
         cls.original=write_model(cls.model,cls.directory/'source')
         after={table:sorted(tuple(row) for row in store.db.execute('SELECT * FROM '+table)) for table in before}
         if before!=after:raise AssertionError('Workbook construction modified the synthetic ledger')
@@ -200,9 +200,9 @@ class ActualOfficeWorkbook(unittest.TestCase):
         self.assertEqual([dividend.cell(total,column).value for column in (12,13,14)],[15,27,7])
         self.assertEqual(dividend.cell(blocks['cumulative_last_row'],12).value,49)
         for column in (12,13,14):self.assertTrue(self.formulas['配当'].cell(total,column).value.startswith('=SUM('))
-        self.assertEqual(dividend['X2'].value,150);self.assertEqual(dividend['Y2'].value,155)
+        self.assertEqual(dividend['W2'].value,150);self.assertEqual(dividend['X2'].value,155)
         label=blocks['calendar_label_row']
-        self.assertEqual(dividend.cell(label,11).value,'カレンダー')
+        self.assertEqual(dividend.cell(label,11).value,2026)
         dates=[dividend.cell(row,11).value.date() for row in range(label+1,blocks['calendar_last_row']+1)]
         self.assertEqual(dates,sorted(dates))
         actual=next(row for row in range(label+1,blocks['calendar_last_row']+1)

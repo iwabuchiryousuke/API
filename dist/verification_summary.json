@@ -1,32 +1,78 @@
 {
-  "version": "3.6.0",
-  "baseline_commit": "0b80c8d193ad24bc301d13090d0ddd6942303eda",
-  "tests": 1007,
+  "version": "3.6.1",
+  "baseline_commit": "546f46d641c2f7baf19db91d93f229f7ba0fa45c",
+  "tests": 1087,
   "failures": 0,
   "errors": 0,
   "skipped": 0,
   "expected_failures": 0,
   "unexpected_successes": 0,
-  "seconds": 218.53,
+  "seconds": 289.586,
   "successful": true,
   "offline_browser_tests": 73,
   "actual_office_tests": 6,
   "scope": "isolated code release ZIP; all browser responses are test fixtures",
   "browser_named_module_tests": 65,
-  "browser_count_source": "independent discovered Chromium fixture-class audit; no skipped tests",
-  "test_source": "isolated extraction of the release ZIP; final documentation-only rebuild",
+  "browser_count_source": "all existing Chromium fixture classes; no added browser cases and no skips",
+  "test_source": "isolated code release ZIP; subsequent documentation-only rebuild",
+  "formatting": {
+    "source_template_sha256": "2d6911cca72c23467abc383b996458cdc27d4cf1695cf6728b3d58eb0c640449",
+    "semantic_cell_count": 510,
+    "column_width_count": 43,
+    "deviations": 0,
+    "no_frozen_panes": true,
+    "exact_fonts_fills_alignments_number_formats_borders": true,
+    "row_height": 20.1,
+    "zoom_percent": {
+      "取引": 73,
+      "配当": 86
+    },
+    "automatic_row_or_column_resizing": false,
+    "external_workbook_references": 0
+  },
+  "app": {
+    "settings_menu_items": 5,
+    "visible_list_actions": [
+      "保存PDFを反映",
+      "銘柄設定",
+      "出力フォルダを開く"
+    ],
+    "configurable_dividend_summary_order": true,
+    "public_research_on_excel_export": true
+  },
+  "calendar": {
+    "current_jst_year_only": true,
+    "summary_dates_month_day": true,
+    "unknown_payment": "未定",
+    "verified_zero_dividend": "無配",
+    "all_events_in_next_calendar_month_highlighted": true,
+    "red": "FFFF7C80",
+    "payment_amounts_only": true
+  },
+  "public_research": {
+    "yahoo_japan_unadjusted_history": true,
+    "investing_dividend_payment_dates": true,
+    "symbol_and_year_checked": true,
+    "existing_verified_facts_preserved": true,
+    "mixed_symbol_json_and_false_zero_policies_rejected": true,
+    "bounded_wait_and_cancellation": true,
+    "literal_first_day_no_holiday_substitution": true,
+    "live_response_received": false,
+    "live_market_values_verified": false,
+    "live_transport_result": "Configured network proxy rejected CONNECT with HTTP 403 before a website response"
+  },
   "source_data": {
     "original_files_unchanged": 254,
     "pdf_files": 155,
     "unique_pdf_documents": 99,
     "supported_documents": 59,
     "retained_documents": 40,
-    "critical_pdf_errors": 0,
-    "original_trade_rows": 28,
-    "original_activity_rows": 18,
+    "critical_errors": 0,
+    "raw_trade_signatures_preserved": true,
+    "raw_activity_keys_preserved": true,
     "repeat_no_duplicates": true,
     "cancellation_database_bytes_unchanged": true,
-    "current_user_79_row_database_available": false
+    "current_user_database_fully_verified": false
   },
   "attached_workbook": {
     "input_rows": 82,
@@ -38,73 +84,41 @@
     "source_workbook_bytes_unchanged": true,
     "source_only_used_for_grouping_not_imported": true
   },
-  "excel": {
-    "sheets": [
-      "取引",
-      "配当"
-    ],
-    "layout_intentionally_changed": true,
-    "source_trade_evidence_preserved": true,
-    "daily_grouping_before_ceiling": true,
-    "k_l_m_excel_formulas": true,
-    "current_capture_O1_P_to_S": true,
-    "missing_cash_nisa_not_backfilled": true,
-    "tax_interest_manual_fields_blank": true,
-    "sum_cumulative_and_grand_total": true,
-    "chronological_calendar": true,
-    "previous_month_and_literal_first_day_closes_adjacent": true,
-    "external_workbook_links": 0,
-    "actual_recalculation": "LibreOfficeDev 26.8.0.0.alpha0 2c87e51eeaa2b413ff4ae097b2705eea1995d8e5"
-  },
-  "scheduling": {
-    "retired": true,
-    "main_ui_schedules_removed": true,
-    "new_cli_acquisition_disabled": true,
-    "owned_legacy_windows_task_cleanup_attempt_on_start": true,
-    "windows_native_cleanup_verified": false
-  },
-  "pdf_archiving": {
-    "valid_unknown_or_unparsed_pdfs_retained": true,
-    "unparsed_files_do_not_stop_supported_imports": true,
-    "owner_conflict_or_corrupt_files_stop": true,
-    "incremental_heading_and_hash_checks_preserved": true,
-    "live_sbi_speed_measured": false
-  },
-  "public_prices": {
-    "optional": true,
-    "bounded_wait": true,
-    "first_day_holiday_substitution": false,
-    "verified_or_manual_reference_values_preserved": true
-  },
   "synthetic_example": {
-    "path": "dist/出力見本_v3.6.0.xlsx",
-    "sha256": "029da2863555780bc5e5273e9fd4774f4c25c5b9caaafb6baf410d32398346fc",
+    "path": "dist/出力見本_v3.6.1.xlsx",
+    "sha256": "9f4e06a35120a6682b5718b150938dafd765e5297384679fdd56ed05fe74ba8c",
     "wholly_synthetic": true,
-    "uploaded_trade_rows_in_example": 0
+    "formula_caches": 110,
+    "formula_errors": 0,
+    "source_template_deviations": 0,
+    "metadata_marks_fictional": true
   },
   "new_runtime_dependencies": false,
   "release_upgrade": {
-    "from_version": "3.5.16",
-    "to_version": "3.6.0",
-    "changed_files": 49,
+    "from_version": "3.6.0",
+    "to_version": "3.6.1",
+    "changed_files": 29,
     "manifest_verified": true,
     "repeat_no_changes": true,
     "backup_manifest_present": true,
     "requirements_changed": false,
     "protected_fixture_hashes_unchanged": true,
-    "protected_fixture_files": 19
+    "protected_fixture_files": 20
   },
   "live_sbi_tested": false,
   "live_gmail_tested": false,
   "windows_tested": false,
   "microsoft_excel_tested": false,
-  "code_zip_sha256": "74e704c949393384a052dc6bb483f80b2b90ddc42e1a79c33159f08b6d98bcc7",
-  "code_zip_bytes": 572471,
-  "code_zip_entries": 178,
+  "code_zip_sha256": "215f034cb8a498f0feb3db8ec39b93dc6dd9dd4a1b7616619c4ceb8614daca8f",
+  "code_zip_bytes": 616613,
+  "code_zip_entries": 189,
   "manifest_verified": true,
   "private_payloads_in_code_zip": 0,
   "runtime_and_tests_match_verified_package": true,
   "post_test_documentation_changes": [
-    "検証結果_v3.6.0.md"
+    "はじめに.html",
+    "はじめに.txt",
+    "はじめに_v3.6.1.txt",
+    "検証結果_v3.6.1.md"
   ]
 }

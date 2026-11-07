@@ -29,6 +29,6 @@ def acquire_selected_pdf(base,account,playwright,authenticate,acquire,
     return {'account':account,'saved':result['saved'],'duplicate':result['duplicate'],'applied':False}
 
 
-def apply_saved(base,month,review,progress=lambda **_:None,cancelled=lambda:False,current_only=False):
+def apply_saved(base,month,review,progress=lambda **_:None,cancelled=lambda:False,current_only=False,reference_refresh=None):
     # Account selection controls where to fetch/copy PDFs, never this scope.
-    return Workflow(base,progress=progress,cancelled=cancelled).run(month,review=review,current_only=current_only)
+    return Workflow(base,progress=progress,cancelled=cancelled).run(month,review=review,current_only=current_only,reference_refresh=reference_refresh)

@@ -189,7 +189,7 @@ class Workflow:
                         staged_market=stage.directory/'market';staged_market.mkdir()
                         for name,raw in public_research.items():(staged_market/name).write_bytes(raw)
                 elif (live.directory/'market').is_dir():shutil.copytree(live.directory/'market',stage.directory/'market')
-                for filename in ('security_names.json',):
+                for filename in ('security_names.json','dividend_order.json'):
                     if (live.directory/filename).exists():shutil.copy2(live.directory/filename,stage.directory/filename)
                 summary=Summary();proposal=[];sources=[]
                 from acquisition_journal import replay_captures
@@ -281,7 +281,7 @@ class Workflow:
                         proposal.append({'account':account,'name':path.name,'kind':kind,'new':added,'existing':existing,'state':'名義・整合性確認済み'})
                 after=(len(stage.records()),len(activities.events()),len(activities.balances()))
                 summary.new_trades=after[0]-before[0];summary.new_cash_or_splits=after[1]-before[1];summary.balance_reports=after[2]-before[2]
-                if current_only and collect and reference_refresh is not None and reference_ready:
+                if current_only and reference_refresh is not None and reference_ready:
                     self.check_cancel();self.emit('REFERENCE_PRICES')
                     original_research=None
                     try:

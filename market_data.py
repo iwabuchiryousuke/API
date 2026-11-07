@@ -45,6 +45,11 @@ def load_research(directory,year):
             for key in ('dps','close','month_start_close'):amount(fact.get(key))
             for key in ('close_date','month_start_close_date'):iso_day(fact.get(key))
             if fact.get('calendar_complete') is not None and type(fact['calendar_complete']) is not bool:raise ValueError()
+            if fact.get('no_dividend') is not None:
+                if type(fact['no_dividend']) is not bool:raise ValueError()
+                if fact['no_dividend'] and (not isinstance(fact.get('no_dividend_source'),str) or not fact['no_dividend_source'].strip()):raise ValueError()
+            for key in ('no_dividend_source','dividend_source','investing_url'):
+                if fact.get(key) is not None and not isinstance(fact[key],str):raise ValueError()
             if not isinstance(fact.get('events',[]),list):raise ValueError()
             for event in fact.get('events',[]):
                 if not isinstance(event,dict):raise ValueError()
@@ -140,6 +145,12 @@ def refresh_month_closes(directory,codes,month,provider=None,cancelled=lambda:Fa
     finally:
         if os.path.exists(temporary):os.unlink(temporary)
     return {'updated':updated,'failed':sorted(failed),'written':True}
+
+
+def refresh_public_research(directory,codes,month,**options):
+    """Refresh prices and current-JST-year dividend dates, off the GUI thread."""
+    from public_research import refresh_public_research as refresh
+    return refresh(directory,codes,month,**options)
 
 def previous_close(code,month,api_key):
     y,m=map(int,month.split('-'));end=date(y,m,1)-timedelta(days=1);start=end.replace(day=1)

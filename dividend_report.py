@@ -11,7 +11,7 @@ import unicodedata
 
 from cost_basis import calculate
 from custody_labels import event_label
-from date_highlights import dates_in
+from date_highlights import dates_in, months_after
 from dividend_forecast import forecast
 from market_data import load_research
 from report_legacy import col, code, reporting_code
@@ -22,8 +22,8 @@ JST = timezone(timedelta(hours=9))
 SUMMARY_START = 11
 SUMMARY_HEADERS = (
     'コード', '銘柄', '権利付き最終日', '配当金支払日', '本決算発表日',
-    '株数', 'DPS', '配当利回り', '実績', '予想(税引後)', '年間予想',
-    '累計配当金', '確認状態', '前月末日終値', '今月1日終値',
+    '株数', 'DPS', '配当利回', '実績', '予想(税後)', '年間予想',
+    '累計配当金', '末日終値', '1日終値',
 )
 _INCOME = ('配当', '税還付', '税還', '利息')
 _CLASS_ORDER = {'権利付き最終日': 0, '配当金支払日': 1, '本決算発表日': 2}
@@ -66,6 +66,32 @@ def _dates(value):
     if isinstance(value, (date, datetime)):
         return [_day(value)]
     return dates_in(value or '')
+
+
+def _calendar_dates(fact, key, year):
+    """Normalize known dates without assigning a year to an undated label."""
+    result = set(_dates(fact.get(key)))
+    event_key = {'payments': 'payment'}.get(key, key)
+    for event in fact.get('events', []):
+        if isinstance(event, dict):
+            result.update(_dates(event.get(event_key)))
+    return sorted(stamp for stamp in result if stamp.year == year)
+
+
+def _no_dividend(fact):
+    """Missing dates or a DPS of zero alone never establish a no-dividend policy."""
+    return (fact.get('no_dividend') is True
+            and isinstance(fact.get('no_dividend_source'), str)
+            and bool(fact['no_dividend_source'].strip()))
+
+
+def _summary_dates(fact, key, year):
+    stamps = _calendar_dates(fact, key, year)
+    if stamps:
+        return '・'.join(f'{stamp.month}/{stamp.day}' for stamp in stamps)
+    if key in ('rights', 'payments') and _no_dividend(fact):
+        return '無配'
+    return '未定'
 
 
 def _price(fact, value_key, date_key, target, previous=False, known_through=None):
@@ -144,6 +170,10 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
     overrides = load_names(store.directory)
     names = {ident: overrides.get(ident, name) for ident, name in names.items()}
     facts = load_research(store.directory, day.year).get('securities', {})
+    # The selected report cutoff controls financial receipts and dated quotes.
+    # The requested schedule always describes this actual calendar year in JST.
+    calendar_facts = (facts if today.year == day.year else
+                      load_research(store.directory, today.year).get('securities', {}))
     eligible = {ident for ident in names if _stock_forecast_eligible(ident, trades)}
     # The legacy DPS rule multiplies shares by a per-share dividend. A numeric
     # fund code does not establish that unit, just as an internal F-ID does not.
@@ -173,7 +203,7 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
         return put(row, column, expression, 'formula_' + kind, **style)
 
     for column, title in enumerate(('日付', '口座', '銘柄', 'コード', '預り', '分類',
-                                     '数量', '単価（円）', '受取額（円）'), 1):
+                                     '数量', '単価(円)', '受取額(円)'), 1):
         put(1, column, title)
     actual = defaultdict(Decimal)
     cumulative = defaultdict(Decimal)
@@ -207,14 +237,21 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
                          if not row['basis_known']}
     for column, title in enumerate(SUMMARY_HEADERS, SUMMARY_START):
         put(1, column, title)
-    ordered = sorted(names, key=lambda ident: (
-        -(actual[ident] + Decimal(str(predicted.get(ident) or 0))), -cumulative[ident], ident))
+    from dividend_order import ordered_codes
+    # Order preferences normalize code spelling. Preserve the caller's original
+    # identifiers for the financial joins, including older ungrouped stores.
+    identifiers = defaultdict(list)
+    for ident in names:
+        identifiers[unicodedata.normalize('NFKC', ident).strip().upper()].append(ident)
+    ordered = [ident for normalized in ordered_codes(store.directory, identifiers)
+               for ident in sorted(identifiers[normalized])]
     for row, ident in enumerate(ordered, 2):
         fact = facts.get(ident, {})
+        current_fact = calendar_facts.get(ident, {})
         put(row, 11, code(ident), 'code')
         put(row, 12, names[ident])
         for column, key in ((13, 'rights'), (14, 'payments'), (15, 'earnings')):
-            put(row, column, fact.get(key) or None)
+            put(row, column, _summary_dates(current_fact, key, today.year))
         buys = f'SUMIFS(取引!$G$2:$G$10000,取引!$D$2:$D$10000,K{row},取引!$F$2:$F$10000,"B")'
         sells = f'SUMIFS(取引!$G$2:$G$10000,取引!$D$2:$D$10000,K{row},取引!$F$2:$F$10000,"S")'
         if ident in position_warnings or not any(str(reporting_code(trade)) == ident for trade in trades):
@@ -222,25 +259,19 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
         else:
             formula(row, 16, f'IF({buys}-{sells}<0,"",{buys}-{sells})')
         put(row, 17, _number(fact.get('dps'), optional=True))
-        formula(row, 18, f'IF(AND(ISNUMBER(Q{row}),ISNUMBER(X{row}),X{row}>0),Q{row}/X{row},"")', 'percent')
+        formula(row, 18, f'IF(AND(ISNUMBER(Q{row}),ISNUMBER(W{row}),W{row}>0),Q{row}/W{row},"")', 'percent')
         criteria = f'$I$2:$I${end_detail},$D$2:$D${end_detail},K{row},$F$2:$F${end_detail},"配当"'
         formula(row, 19, f'SUMIFS({criteria},$A$2:$A${end_detail},">="&DATE({day.year},1,1),$A$2:$A${end_detail},"<"&DATE({day.year + 1},1,1))')
         put(row, 20, _number(predicted.get(ident), optional=True))
         formula(row, 21, f'IF(ISNUMBER(T{row}),SUM(S{row}:T{row}),"")')
         formula(row, 22, f'SUMIFS({criteria})')
-        notes = [str(fact.get('status') or '予定・株価の未確認項目は空欄')]
         prev_price = _price(fact, 'close', 'close_date', previous, previous=True, known_through=today)
         first_price = _price(fact, 'month_start_close', 'month_start_close_date', first, known_through=today)
-        if prev_price is None:
-            notes.append('前月末終値未確認')
-        if first_price is None:
-            notes.append('今月1日終値未確認')
-        put(row, 23, '／'.join(notes))
-        put(row, 24, prev_price, 'number')
-        put(row, 25, first_price, 'number')
+        put(row, 23, prev_price, 'number')
+        put(row, 24, first_price, 'number')
 
     summary_last = max(3, len(ordered) + 2)
-    put(summary_last, 12, '合計')
+    put(summary_last, 11, '合計')
     last_security = max(2, len(ordered) + 1)
     for column in (19, 22):
         letter = col(column)
@@ -250,7 +281,7 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
         formula(summary_last, column,
                 f'IF(COUNT({letter}2:{letter}{last_security})={len(ordered)},SUM({letter}2:{letter}{last_security}),"")')
 
-    cumulative_header = summary_last + 3
+    cumulative_header = summary_last + 2
     for column, title in enumerate(('年', '配当', '税還', '利息'), 11):
         put(cumulative_header, column, title)
     years = range(min([day.year] + [int(entry['date'][:4]) for entry in events]), day.year + 1)
@@ -273,28 +304,24 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
     put(grand_total, 11, '総計')
     formula(grand_total, 12, f'SUM(L{total_row}:N{total_row})')
 
-    calendar_label = grand_total + 3
-    put(calendar_label, 11, 'カレンダー')
+    calendar_label = grand_total + 2
+    put(calendar_label, 11, today.year, 'number', format='0')
     calendar = {}
     for ident in ordered:
-        fact = facts.get(ident, {})
+        fact = calendar_facts.get(ident, {})
         for key, kind in (('rights', '権利付き最終日'), ('payments', '配当金支払日'), ('earnings', '本決算発表日')):
-            for stamp in _dates(fact.get(key)):
+            for stamp in _calendar_dates(fact, key, today.year):
                 calendar[(stamp, ident, kind)] = None
-        for entry in fact.get('events', []):
-            if not isinstance(entry, dict):
-                continue
-            for key, kind in (('rights', '権利付き最終日'), ('payment', '配当金支払日')):
-                for stamp in _dates(entry.get(key)):
-                    calendar[(stamp, ident, kind)] = None
     for (ident, stamp), amount in actual_payments.items():
-        calendar[(_day(stamp), ident, '配当金支払日')] = None
+        if _day(stamp).year == today.year:
+            calendar[(_day(stamp), ident, '配当金支払日')] = None
     calendar_rows = sorted(calendar, key=lambda item: (item[0], _CLASS_ORDER[item[2]], item[1]))
     if len(calendar_rows) > 9998:
         raise ValueError('カレンダーが9998行を超えます。出力範囲を確認してください。')
-    highlight = None
+    highlights = []
+    highlight_until = months_after(today, 1)
     for row, (stamp, ident, kind) in enumerate(calendar_rows, calendar_label + 1):
-        put(row, 11, stamp.isoformat(), 'date')
+        put(row, 11, stamp.isoformat(), 'date', format='m/d')
         put(row, 12, names[ident])
         put(row, 13, kind)
         amount = None
@@ -312,18 +339,18 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
                 amount = forecast_amounts.get(key, Decimal(0))
                 style = '#,##0"（予想）"'
                 put(row, 14, amount, 'number', format=style)
-        if highlight is None and stamp >= today:
-            highlight = row
+        if today <= stamp <= highlight_until:
+            highlights.append(row)
     if calendar_rows:
         start_row = calendar_label + 1
         end_row = calendar_label + len(calendar_rows)
         sheet['conditional_formats'].append(dict(
-            range=f'K{start_row}:N{end_row}', dxf=2,
-            formula=f'AND(ISNUMBER($K{start_row}),$K{start_row}>=TODAY(),COUNTIF($K${start_row}:$K{start_row},">="&TODAY())=1)'))
+            range=f'K{start_row}:N{end_row}', dxf=1,
+            formula=f'AND(ISNUMBER($K{start_row}),$K{start_row}>=TODAY(),$K{start_row}<=EDATE(TODAY(),1))'))
 
     widths = {1: 13, 2: 12, 3: 25, 4: 10, 5: 12, 6: 10, 7: 12, 8: 15, 9: 18,
               10: 3, 11: 13, 12: 25, 13: 22, 14: 22, 15: 22, 16: 12, 17: 12,
-              18: 13, 19: 17, 20: 17, 21: 17, 22: 17, 23: 38, 24: 16, 25: 16}
+              18: 13, 19: 17, 20: 17, 21: 17, 22: 17, 23: 16, 24: 16}
     sheet['widths'] = {str(key): value for key, value in widths.items()}
     for cell in cells:
         cell['align'] = {'v': 'center', 'wrap': True}
@@ -333,5 +360,7 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
                            cumulative_total_row=total_row, cumulative_last_row=grand_total,
                            calendar_label_row=calendar_label, calendar_first_row=calendar_label + 1,
                            calendar_last_row=calendar_label + len(calendar_rows),
-                           calendar_highlight_row=highlight)
+                           calendar_highlight_row=highlights[0] if highlights else None,
+                           calendar_highlight_rows=highlights, calendar_year=today.year,
+                           detail_last_row=end_detail)
     return sheet

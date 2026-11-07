@@ -14,7 +14,7 @@ def warning_lines(warnings):
     if excluded:lines.append(f'未解析PDF {len(excluded)}件：原本を保存したまま、この書類だけ集計から除外します。他の対応PDFと資産の反映は続けます。書類名と理由を下の一覧で確認してください。')
     for warning in dict.fromkeys(warnings):
         if warning=='SAVED_FILES_ONLY':lines.append('保存済みPDF・取得証跡から更新します。今回はSBIへ接続していません。')
-        elif warning=='REFERENCE_PRICES_UNAVAILABLE':lines.append('月末・1日の終値の一部を確認できませんでした。確認できない価格は空欄にし、PDF・現金・NISAの反映は続けます。')
+        elif warning=='REFERENCE_PRICES_UNAVAILABLE':lines.append('公開終値・配当日の一部を確認できませんでした。価格は空欄、支払日が分からない場合は未定とし、PDF・現金・NISAの反映は続けます。')
         elif warning=='REFERENCE_CACHE_CONFLICT':lines.append('確認中に株価の参照データが変更されたため、変更済みの元データを保持しました。このExcelには今回確認できた終値を使用しています。')
         elif warning=='REFERENCE_CACHE_UNSAVED':lines.append('今回の終値の参照データを保存できませんでした。金融データの登録は完了しています。次回は価格を再確認してください。')
         elif warning.startswith('NISA_TRANSFER_UNAPPLIED:'):
@@ -94,6 +94,17 @@ def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=Fa
             from update_operations import collect_and_apply,acquire_selected_pdf,apply_saved
             progress=lambda **x:events.put(('progress',x))
             message=lambda msg:events.put(('message',msg))
+            reference_refresh=None
+            if current_only:
+                def reference_refresh(stage,selected_month):
+                    from datetime import datetime,timedelta,timezone
+                    from market_data import refresh_public_research
+                    target=selected_month or datetime.now(timezone(timedelta(hours=9))).strftime('%Y-%m')
+                    codes={row.get('code','') for row in stage.records(selected_month)}
+                    from activity import Activities
+                    codes.update(row.get('code','') for row in Activities(stage).events(selected_month) if row.get('type')=='配当')
+                    message('Yahooの終値とInvesting.comの今年の配当日を確認しています。')
+                    return refresh_public_research(stage.directory,codes,target,cancelled=cancel.is_set)
             if online:
                 from playwright.sync_api import sync_playwright
                 from auto_login import run_one
@@ -114,17 +125,8 @@ def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=Fa
                             return run_one(pw,account,stage,gmail_session=session,progress=message,cancelled=cancel.is_set,documents=False,target_dates=flow.target_dates)
                         result=flow.run(month,collect=asset_collect,review=review,accounts=accounts,include_saved_pdfs=False)
                     else:
-                        reference_refresh=None
-                        if current_only:
-                            def reference_refresh(stage,selected_month):
-                                from datetime import datetime,timedelta,timezone
-                                from market_data import refresh_month_closes
-                                target=selected_month or datetime.now(timezone(timedelta(hours=9))).strftime('%Y-%m')
-                                codes={row.get('code','') for row in stage.records(selected_month)}
-                                message('前月末・当月1日の公開終値を確認しています。未確認の価格は空欄にします。')
-                                return refresh_month_closes(stage.directory,codes,target,cancelled=cancel.is_set)
                         result=collect_and_apply(base,month,pw,ensure_service,run_one,review,progress=progress,message=message,cancelled=cancel.is_set,current_only=current_only,reference_refresh=reference_refresh)
-            else:result=apply_saved(base,month,review,progress=progress,cancelled=cancel.is_set,current_only=current_only)
+            else:result=apply_saved(base,month,review,progress=progress,cancelled=cancel.is_set,current_only=current_only,reference_refresh=reference_refresh)
             events.put(('done',result))
         except Cancelled:events.put(('cancelled',None))
         except Exception as e:

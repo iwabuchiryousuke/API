@@ -151,6 +151,11 @@ class App:
         self.status=tk.StringVar();ttk.Label(outer,textvariable=self.status,style='Muted.TLabel').pack(anchor='w',pady=(0,8))
         self.migration_notice=tk.StringVar()
         ttk.Label(outer,textvariable=self.migration_notice,foreground='#8b5b13',wraplength=1050).pack(anchor='w')
+        list_actions=ttk.Frame(outer);list_actions.pack(fill='x',pady=(6,8))
+        ttk.Label(list_actions,text='取引一覧',style='Muted.TLabel').pack(side='left',padx=(0,14))
+        for label,command in [('保存PDFを反映',self.update_saved),('銘柄設定',self.set_security_names),('出力フォルダを開く',self.open_outputs)]:
+            button=ttk.Button(list_actions,text=label,command=command,padding=(10,5))
+            button.pack(side='left',padx=(0,8));self.buttons.append(button)
         columns=('date','account','name','code','custody','side','qty','price','amount')
         frame=ttk.Frame(outer);frame.pack(fill='both',expand=True)
         self.tree=ttk.Treeview(frame,columns=columns,show='headings')
@@ -189,9 +194,6 @@ class App:
     def _settings_menu(self):
         menu=tk.Menu(self.settings,tearoff=False)
         for label,command in [('口座名を変更',self.rename),('PDF名義を確認・変更',self.set_pdf_owner),('SBIログイン情報',self.set_login_credentials),('Gmail連携を設定',self.connect_gmail),('Gmailだけ診断',self.check_gmail)]:
-            menu.add_command(label=label,command=command)
-        menu.add_separator()
-        for label,command in [('銘柄名・コードを設定',self.set_security_names),('配当予定・終値を確認',self.edit_market),('保存済みPDFから再作成',self.update_saved),('出力フォルダを開く',self.open_outputs),('診断ZIPを作成',self.export_diagnostics),('説明書を開く',self.open_guide)]:
             menu.add_command(label=label,command=command)
         self.settings.configure(menu=menu)
 
@@ -329,14 +331,49 @@ class App:
     def export_excel(self):
         if self.busy:return
         try:
-            target=export_trades(self.store,BASE/'output',self.month.get().strip(),self.activities)
-            messagebox.showinfo('Excelを出力しました',f'{target}\n\n「取引」「配当」に出力しました。',parent=self.root)
-        except (LedgerError,OSError,ValueError) as error:messagebox.showerror('出力できません',str(error),parent=self.root)
+            month=self.month.get().strip();self.store.records(month)
+        except (LedgerError,OSError,ValueError) as error:
+            messagebox.showerror('出力できません',str(error),parent=self.root);return
+        import queue,threading
+        from export_workflow import export_with_research
+        from update_workflow import Cancelled
+        events=queue.Queue();cancel=threading.Event();self.busy=True
+        for button in self.buttons:button.configure(state='disabled')
+        dialog=tk.Toplevel(self.root);dialog.title('Excelを出力');dialog.transient(self.root);dialog.geometry('560x150')
+        status=tk.StringVar(value='公開情報を確認しています。')
+        ttk.Label(dialog,textvariable=status,wraplength=520,padding=16).pack(fill='x')
+        def stop():
+            cancel.set();status.set('中止しています。現在の通信が戻るまでお待ちください。')
+        ttk.Button(dialog,text='中止',command=stop).pack(pady=8)
+        dialog.protocol('WM_DELETE_WINDOW',stop)
+        def worker():
+            try:
+                result=export_with_research(BASE,month,progress=lambda text:events.put(('progress',text)),cancelled=cancel.is_set)
+                events.put(('done',result))
+            except Cancelled:events.put(('cancelled',None))
+            except Exception as error:
+                events.put(('error',str(error) if isinstance(error,(LedgerError,OSError,ValueError)) else 'Excelを出力できません。台帳と参照設定を確認してください。'))
+        def poll():
+            while True:
+                try:kind,value=events.get_nowait()
+                except queue.Empty:break
+                if kind=='progress':status.set(value);continue
+                self.busy=False
+                for button in self.buttons:button.configure(state='normal')
+                dialog.destroy()
+                if kind=='done':
+                    note='\n\n公開情報の一部は未取得です。価格は空欄、分からない支払日は未定です。' if value['public_research_incomplete'] else ''
+                    messagebox.showinfo('Excelを出力しました',str(value['output'])+note,parent=self.root)
+                elif kind=='error':messagebox.showerror('出力できません',value,parent=self.root)
+                return
+            self.root.after(100,poll)
+        threading.Thread(target=worker,daemon=True).start();poll()
 
     def set_security_names(self):
         if self.busy:return
-        from security_names import edit
-        edit(self.root,self.store)
+        from dividend_order import edit
+        try:edit(self.root,self.store,self.activities)
+        except (LedgerError,OSError,ValueError) as error:messagebox.showerror('銘柄設定',str(error),parent=self.root)
 
     def edit_market(self):
         if not self.busy:subprocess.Popen([sys.executable,str(BASE/'market_editor.py')],cwd=BASE)

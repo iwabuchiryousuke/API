@@ -22,6 +22,9 @@ def write_model(model,outdir,management=False):
     outdir=Path(outdir);outdir.mkdir(parents=True,exist_ok=True)
     target=outdir/f'{"管理見本" if management else "売買記録"}_{model["as_of"]}_{datetime.now():%Y%m%d_%H%M%S_%f}.xlsx'
     temporary=target.with_suffix('.tmp')
+    if model.get('layout')=='uploaded-template-v3.6.1':
+        from excel_template_v361 import write_template_model
+        return write_template_model(model,target)
     styles={};xfs=[];custom_formats={}
     calendar_red=any(c.get('fill')=='FFC7CE' for sh in model['sheets'] for c in sh['cells']) or any(
         rule.get('dxf')==2 for sh in model['sheets'] for rule in sh.get('conditional_formats',[]))

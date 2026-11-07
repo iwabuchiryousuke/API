@@ -33,7 +33,7 @@ class DividendReportV36(unittest.TestCase):
         self.activities.add_cash('B', '税還付', '2026-10-19', '123', 'Old descriptive text')
         sheet = self.build(); cells = grid(sheet)
         self.assertEqual([cells[1, column]['v'] for column in range(1, 10)],
-                         ['日付', '口座', '銘柄', 'コード', '預り', '分類', '数量', '単価（円）', '受取額（円）'])
+                         ['日付', '口座', '銘柄', 'コード', '預り', '分類', '数量', '単価(円)', '受取額(円)'])
         self.assertNotIn((1, 10), cells)
         for row in (row for row, column in cells if column == 6 and cells[row, column]['v'] in ('税還', '利息')):
             for column in (3, 4, 5, 7, 8):
@@ -44,20 +44,19 @@ class DividendReportV36(unittest.TestCase):
 
     def test_security_summary_is_contiguous_and_deleted_headings_are_absent(self):
         sheet = self.build(); cells = grid(sheet)
-        self.assertEqual(tuple(cells[1, column]['v'] for column in range(11, 26)), SUMMARY_HEADERS)
-        self.assertEqual(max(cell['c'] for cell in sheet['cells']), 25)
-        for forbidden in ('手数料・税額（円）', '株価日', '出典・確認日', '銘柄別との差'):
+        self.assertEqual(tuple(cells[1, column]['v'] for column in range(11, 25)), SUMMARY_HEADERS)
+        self.assertEqual(max(cell['c'] for cell in sheet['cells']), 24)
+        for forbidden in ('手数料・税額（円）', '株価日', '出典・確認日', '銘柄別との差', '確認状態'):
             self.assertNotIn(forbidden, [cell['v'] for cell in sheet['cells']])
-        self.assertEqual(cells[1, 24]['v'], '前月末日終値')
-        self.assertEqual(cells[1, 25]['v'], '今月1日終値')
+        self.assertEqual(cells[1, 23]['v'], '末日終値')
+        self.assertEqual(cells[1, 24]['v'], '1日終値')
 
-    def test_blocks_have_exactly_two_empty_rows_and_all_three_cumulative_sum_formulas(self):
+    def test_blocks_have_one_template_empty_row_and_all_three_cumulative_sum_formulas(self):
         sheet = self.build(); cells = grid(sheet); blocks = sheet['blocks']
-        self.assertEqual(blocks['cumulative_header_row'], blocks['summary_last_row'] + 3)
-        self.assertEqual(blocks['calendar_label_row'], blocks['cumulative_last_row'] + 3)
+        self.assertEqual(blocks['cumulative_header_row'], blocks['summary_last_row'] + 2)
+        self.assertEqual(blocks['calendar_label_row'], blocks['cumulative_last_row'] + 2)
         for boundary in (blocks['summary_last_row'], blocks['cumulative_last_row']):
-            self.assertFalse(any((row, column) in cells for row in (boundary + 1, boundary + 2)
-                                 for column in range(11, 26)))
+            self.assertFalse(any((boundary + 1, column) in cells for column in range(11, 25)))
         total = blocks['cumulative_total_row']
         self.assertEqual(cells[total, 11]['v'], '累計')
         for column in (12, 13, 14):
@@ -81,13 +80,13 @@ class DividendReportV36(unittest.TestCase):
                                  month_start_close=132, month_start_close_date='2026-10-02')})
         cells = grid(self.build())
         row = next(row for row, column in cells if column == 11 and cells[row, column]['v'] == 9900)
-        self.assertEqual(cells[row, 24]['v'], 130)
-        self.assertIsNone(cells[row, 25]['v'])
+        self.assertEqual(cells[row, 23]['v'], 130)
+        self.assertIsNone(cells[row, 24]['v'])
         self.facts({'9900': dict(close=130, close_date='2026-08-31',
                                  month_start_close=132, month_start_close_date='2026-10-01')})
         cells = grid(self.build())
-        self.assertIsNone(cells[row, 24]['v'])
-        self.assertEqual(cells[row, 25]['v'], 132)
+        self.assertIsNone(cells[row, 23]['v'])
+        self.assertEqual(cells[row, 24]['v'], 132)
 
     def test_zero_boolean_and_future_closing_quotes_remain_unobserved(self):
         for invalid in (0, True, False, -1):
@@ -96,19 +95,19 @@ class DividendReportV36(unittest.TestCase):
                                          month_start_close=invalid, month_start_close_date='2026-10-01')})
                 cells = grid(self.build())
                 row = next(row for row, column in cells if column == 11 and cells[row, column]['v'] == 9900)
-                self.assertIsNone(cells[row, 24]['v']); self.assertIsNone(cells[row, 25]['v'])
+                self.assertIsNone(cells[row, 23]['v']); self.assertIsNone(cells[row, 24]['v'])
         self.facts({'9900': dict(close=130, close_date='2026-09-30',
                                  month_start_close=132, month_start_close_date='2026-10-01')})
         cells = grid(build_dividend_sheet(self.store, self.activities, '2026-10-31', today=date(2026, 9, 30)))
-        self.assertEqual(cells[row, 24]['v'], 130)
-        self.assertIsNone(cells[row, 25]['v'])
+        self.assertEqual(cells[row, 23]['v'], 130)
+        self.assertIsNone(cells[row, 24]['v'])
 
     def test_calendar_is_chronological_without_a_column_header_row(self):
         self.facts({'9900': dict(rights='2026-11-27 / 2026-06-26',
                                  payments='2026-12-15 / 2026-09-15', earnings='2026-10-28')})
         sheet = self.build(); cells = grid(sheet); blocks = sheet['blocks']
         label = blocks['calendar_label_row']
-        self.assertEqual(cells[label, 11]['v'], 'カレンダー')
+        self.assertEqual(cells[label, 11]['v'], 2026)
         self.assertFalse(any((label, column) in cells for column in (12, 13, 14)))
         rows = range(blocks['calendar_first_row'], blocks['calendar_last_row'] + 1)
         stamps = [cells[row, 11]['v'] for row in rows]
@@ -133,7 +132,7 @@ class DividendReportV36(unittest.TestCase):
         self.assertEqual(sum(cell['v'] for (row, column), cell in cells.items()
                              if column == 9 and row > 1 and cells[row, 6]['v'] == '配当'), 150)
 
-    def test_unknown_future_payment_remains_blank_and_only_first_upcoming_rule_is_used(self):
+    def test_unknown_future_payment_remains_blank_and_upcoming_month_rule_is_used(self):
         self.facts({'9900': dict(calendar_complete=False, rights='2026-11-10',
                                  payments='2026-11-20', earnings='2026-11-10')})
         sheet = self.build(); cells = grid(sheet); blocks = sheet['blocks']
@@ -142,8 +141,9 @@ class DividendReportV36(unittest.TestCase):
         self.assertNotIn((future_payment, 14), cells)
         self.assertEqual(len(sheet['conditional_formats']), 1)
         rule = sheet['conditional_formats'][0]
-        self.assertEqual(rule['dxf'], 2)
-        self.assertIn('COUNTIF(', rule['formula'])
+        self.assertEqual(rule['dxf'], 1)
+        self.assertIn('EDATE(TODAY(),1)', rule['formula'])
+        self.assertNotIn('COUNTIF(', rule['formula'])
         self.assertIn('TODAY()', rule['formula'])
         self.assertEqual(rule['range'], f'K{blocks["calendar_first_row"]}:N{blocks["calendar_last_row"]}')
         first_upcoming = blocks['calendar_highlight_row']
@@ -162,14 +162,15 @@ class DividendReportV36(unittest.TestCase):
         summary_row = next(row for row, column in cells if column == 11 and cells[row, column]['v'] == 9900)
         self.assertEqual(cells[summary_row, 20]['v'], 150)
 
-    def test_next_year_announced_payment_is_not_falsely_zero_from_current_year_forecast(self):
+    def test_next_year_announced_payment_stays_outside_the_current_year_calendar(self):
         self.facts({'9900': dict(calendar_complete=True,
                                  events=[dict(rights='2026-12-28', payment='2027-01-05',
                                               payment_year=2027, dps=2)])})
         sheet = self.build(); cells = grid(sheet); blocks = sheet['blocks']
-        payment = next(row for row in range(blocks['calendar_first_row'], blocks['calendar_last_row'] + 1)
-                       if cells[row, 11]['v'] == '2027-01-05')
-        self.assertNotIn((payment, 14), cells)
+        self.assertNotIn('2027-01-05', [cells[row, 11]['v']
+                                      for row in range(blocks['calendar_first_row'], blocks['calendar_last_row'] + 1)])
+        summary_row = next(row for row, column in cells if column == 11 and cells[row, column]['v'] == 9900)
+        self.assertEqual(cells[summary_row, 20]['v'], 0)
 
     def test_synthetic_fund_id_does_not_turn_unmatched_forecast_into_zero(self):
         import hashlib
