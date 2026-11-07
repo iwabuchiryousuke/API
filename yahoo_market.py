@@ -62,9 +62,11 @@ def previous_close(code,month,factory=None):
 
 
 def month_closes(code,month,factory=None,now=None):
-    """One public query for prior-month last close and literal day-one close."""
+    """Prior-month close, literal day one, and the verified first trading day."""
     if not re.fullmatch(r'[0-9][0-9A-Z]{3}',str(code)):raise ValueError('国内コードを指定してください。')
     first=date.fromisoformat(month+'-01');prior=first-timedelta(days=1);start=prior.replace(day=1)
+    from jpx_calendar import first_trading_day,CALENDAR_SOURCE
+    opening=first_trading_day(month)
     jst=timezone(timedelta(hours=9));moment=now or datetime.now(jst)
     if moment.tzinfo is None:raise ValueError('現在時刻にタイムゾーンを指定してください。')
     moment=moment.astimezone(jst)
@@ -76,8 +78,8 @@ def month_closes(code,month,factory=None,now=None):
         try:
             from public_research import yahoo_japan_month_closes
             japanese=yahoo_japan_month_closes(code,month,now=moment)
-            ready=first<moment.date() or (moment.hour,moment.minute)>=(16,0)
-            if 'close' in japanese and ('month_start_close' in japanese or not ready or first.weekday()>=5):
+            ready=opening<moment.date() or opening==moment.date() and (moment.hour,moment.minute)>=(16,0)
+            if 'close' in japanese and ('month_open_close' in japanese or not ready):
                 return japanese
         except Exception:
             japanese={}
@@ -85,7 +87,7 @@ def month_closes(code,month,factory=None,now=None):
         factory=yf.Ticker
     else:japanese={}
     try:
-        data=factory(str(code)+'.T').history(start=start.isoformat(),end=(first+timedelta(days=1)).isoformat(),
+        data=factory(str(code)+'.T').history(start=start.isoformat(),end=(opening+timedelta(days=1)).isoformat(),
             auto_adjust=False,actions=False,raise_errors=True,timeout=15)
     except Exception:
         if japanese:return japanese
@@ -93,10 +95,15 @@ def month_closes(code,month,factory=None,now=None):
     if data.empty or 'Close' not in data:
         if japanese:return japanese
         raise ValueError('対象月の終値を確認できません。')
-    bars=[]
+    by_day={}
     for stamp,value in data['Close'].dropna().items():
-        day=stamp.date();amount=number(value)
-        if not isinstance(value,bool) and amount is not None and amount>0 and start<=day<=first:bars.append((day,amount))
+        # Some chart clients expose the Tokyo session's midnight as the prior
+        # UTC date. Use the exchange's JST calendar date before selecting bars.
+        local=stamp.astimezone(jst) if getattr(stamp,'tzinfo',None) is not None else stamp
+        day=local.date();amount=number(value)
+        if not isinstance(value,bool) and amount is not None and amount>0 and start<=day<=opening:
+            by_day.setdefault(day,set()).add(amount)
+    bars=[(day,next(iter(values))) for day,values in by_day.items() if len(values)==1]
     result=dict(japanese);source=f'Yahoo Finance via yfinance / {code}.T / unadjusted close'
     older=[(day,amount) for day,amount in bars if day<first]
     if older:
@@ -108,4 +115,12 @@ def month_closes(code,month,factory=None,now=None):
     if ready and len(exact)==1 and 'month_start_close' not in result:
         day,amount=exact[0]
         result.update(month_start_close=amount,month_start_close_date=day.isoformat(),month_start_price_source=source)
+    # The first observed bar is insufficient: its date must equal the expected
+    # JPX opening date. Missing opening bars are never replaced by later bars.
+    ready=opening<moment.date() or opening==moment.date() and (moment.hour,moment.minute)>=(16,0)
+    exact=[(day,amount) for day,amount in bars if day==opening]
+    if ready and len(exact)==1 and 'month_open_close' not in result:
+        day,amount=exact[0]
+        result.update(month_open_close=amount,month_open_close_date=day.isoformat(),
+                      month_open_price_source=source,month_open_calendar_source=CALENDAR_SOURCE)
     return result

@@ -83,6 +83,7 @@ def create_office_fixture(base):
     fact=dict(calendar_complete=True,rights='2026/10/27',payments='2026/11/10',
               earnings='2026/11/11',dps=4,close=150,close_date='2026-09-30',
               month_start_close=155,month_start_close_date='2026-10-01',
+              month_start_price_source='Synthetic dated first-trading-day close',
               events=[dict(rights='2026-10-27',payment='2026-11-10',dps=4)])
     (market/'research_2026.json').write_text(json.dumps({'year':2026,'securities':{'9900':fact}}))
     capture={}

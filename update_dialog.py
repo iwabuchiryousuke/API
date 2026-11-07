@@ -45,7 +45,9 @@ def warning_lines(warnings):
 
 def launch(app,base,online=False,accounts=None,assets_only=False,acquire_only=False,force_pdf_refresh=False,current_only=False):
     if app.busy:return
-    month=app.month.get().strip()
+    # The current desktop always handles the complete registered ledger.
+    # The optional old helper input remains only for legacy callers.
+    month='' if current_only or not hasattr(app,'month') else app.month.get().strip()
     try:app.store.records(month)
     except Exception as e:messagebox.showerror('対象月を確認',str(e));return
     if online:

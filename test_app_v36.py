@@ -51,13 +51,14 @@ class FocusedDesktop(unittest.TestCase):
         self.stack.enter_context(patch('app.tk.Toplevel',side_effect=self.widgets.create))
         self.stack.enter_context(patch('app.tk.Menu',side_effect=self.widgets.create))
         self.combos=self.stack.enter_context(patch('app.ttk.Combobox',side_effect=self.widgets.create))
-        for name in ('Frame','Label','Button','Menubutton','Entry','Treeview','Scrollbar'):
+        for name in ('Frame','Label','Button','Menubutton','Entry','Treeview','Scrollbar','Panedwindow'):
             self.stack.enter_context(patch('app.ttk.'+name,side_effect=self.widgets.create))
         self.stack.enter_context(patch('app.ttk.Style'))
         self.stack.enter_context(patch('app.Store',return_value=self.store))
         self.stack.enter_context(patch('app.Activities'))
         self.stack.enter_context(patch('data_backup.backup_before_upgrade'))
         self.stack.enter_context(patch('family_profile.configure'))
+        self.stack.enter_context(patch('app.calendar_rows',return_value=[]))
         self.stack.enter_context(patch.dict(sys.modules,{'trade_report':SimpleNamespace(group_trades=Mock(return_value=[]))}))
 
     def texts(self):return [widget.options['text'] for widget in self.widgets.widgets if 'text' in widget.options]

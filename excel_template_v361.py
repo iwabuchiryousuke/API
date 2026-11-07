@@ -91,7 +91,7 @@ HEADERS={
     '配当':{1:'日付',2:'口座',3:'銘柄',4:'コード',5:'預り',6:'分類',7:'数量',8:'単価(円)',9:'受取額(円)',
           11:'コード',12:'銘柄',13:'権利付き最終日',14:'配当金支払日',15:'本決算発表日',16:'株数',
           17:'DPS',18:'配当利回',19:'実績',20:'予想(税後)',21:'年間予想',22:'累計配当金',
-          23:'末日終値',24:'1日終値'},
+          23:'末日終値',24:'月初終値'},
 }
 
 
@@ -189,8 +189,10 @@ class _StyleTable:
         fmt=cell.get('format')
         if not calendar:return base
         if cell['c']==11 and fmt=='m/d':return self.clone(base,'m/d')
-        if cell['c']==14 and isinstance(fmt,str) and '予想' in fmt:
-            return self.clone(base,'#,##0"（予想）"')
+        if cell['c']==14:
+            # Payment amounts share the source font/alignment, but the user
+            # requested numbers only for both recorded and forecast payments.
+            return self.clone(16,'#,##0')
         return base
 
     def clone(self,base,fmt):
@@ -250,7 +252,7 @@ def _value(cell):
     return ' t="inlineStr"','<is><t xml:space="preserve">'+escape(_clean(value))+'</t></is>'
 
 
-def _sheet_xml(sheet,styles):
+def _sheet_xml(sheet,styles,has_comments=False):
     geometry=GEOMETRY[sheet['name']]
     rows={}
     for cell in sheet['cells']:
@@ -283,7 +285,60 @@ def _sheet_xml(sheet,styles):
             '<dimension ref="A1:'+_column(geometry['max_col'])+str(maximum)+'"/>'
             +geometry['sheetViews']+geometry['sheetFormatPr']+geometry['cols']
             +'<sheetData>'+''.join(data)+'</sheetData>'+geometry['phoneticPr']
-            +''.join(rules)+geometry['pageMargins']+'</worksheet>')
+            +''.join(rules)+geometry['pageMargins']
+            +('<legacyDrawing r:id="commentsVml"/>' if has_comments else '')+'</worksheet>')
+
+
+def _comment_cells(sheet):
+    """Only explicit model notes enter the output; attachment notes are absent."""
+    by_position={(cell['r'],cell['c']):cell for cell in sheet['cells']}
+    comments=[]
+    for (row,column),cell in sorted(by_position.items()):
+        text=cell.get('comment')
+        if text is None or text=='':continue
+        if not isinstance(text,str):raise ValueError('Excel comments must be plain text')
+        text=_clean(text)
+        if not text:continue
+        if len(text)>32767:raise ValueError('An Excel comment exceeds the supported text length')
+        comments.append((row,column,text))
+    return comments
+
+
+def _write_comments(package,index,comments):
+    """Write hidden, ordinary Excel notes with internal relationships only."""
+    notes=''.join('<comment ref="'+_column(column)+str(row)+'" authorId="0"><text>'
+                  '<t xml:space="preserve">'+escape(text)+'</t></text></comment>'
+                  for row,column,text in comments)
+    package.writestr('xl/comments/comment'+str(index)+'.xml',
+                     '<comments xmlns="'+NS+'"><authors><author>家族の売買記録</author></authors>'
+                     '<commentList>'+notes+'</commentList></comments>')
+    relationships=('<Relationships xmlns="'+REL+'">'
+                   '<Relationship Id="comments" Type="'+OFF+'comments" Target="../comments/comment'+str(index)+'.xml"/>'
+                   '<Relationship Id="commentsVml" Type="'+OFF+'vmlDrawing" Target="../drawings/commentsDrawing'+str(index)+'.vml"/>'
+                   '</Relationships>')
+    package.writestr('xl/worksheets/_rels/sheet'+str(index)+'.xml.rels',relationships)
+    shapes=[]
+    for number,(row,column,_) in enumerate(comments,1025):
+        anchor=','.join(str(value) for value in (column,15,row-1,2,column+3,15,row+3,16))
+        shapes.append('<v:shape id="_x0000_s'+str(number)+'" type="#_x0000_t202" '
+                      'style="position:absolute;margin-left:59.25pt;margin-top:1.5pt;'
+                      'width:180pt;height:70pt;z-index:1;visibility:hidden" '
+                      'fillcolor="#ffffe1" o:insetmode="auto">'
+                      '<v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/>'
+                      '<v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto">'
+                      '<div style="text-align:left"/></v:textbox><x:ClientData ObjectType="Note">'
+                      '<x:MoveWithCells/><x:SizeWithCells/><x:Anchor>'+anchor+'</x:Anchor>'
+                      '<x:AutoFill>False</x:AutoFill><x:Row>'+str(row-1)+'</x:Row>'
+                      '<x:Column>'+str(column-1)+'</x:Column></x:ClientData></v:shape>')
+    drawing=('<xml xmlns:v="urn:schemas-microsoft-com:vml" '
+             'xmlns:o="urn:schemas-microsoft-com:office:office" '
+             'xmlns:x="urn:schemas-microsoft-com:office:excel">'
+             '<o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout>'
+             '<v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" '
+             'path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/>'
+             '<v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>'
+             +''.join(shapes)+'</xml>')
+    package.writestr('xl/drawings/commentsDrawing'+str(index)+'.vml',drawing)
 
 
 def write_template_model(model,target):
@@ -292,13 +347,17 @@ def write_template_model(model,target):
     if [sheet['name'] for sheet in model['sheets']]!=['取引','配当']:
         raise ValueError('The uploaded template contains exactly two sheets')
     styles=_StyleTable()
-    sheets=[_sheet_xml(sheet,styles) for sheet in model['sheets']]
+    comments=[_comment_cells(sheet) for sheet in model['sheets']]
+    sheets=[_sheet_xml(sheet,styles,bool(notes)) for sheet,notes in zip(model['sheets'],comments)]
     try:
         with ZipFile(temporary,'w',ZIP_DEFLATED) as package:
             types=[('/xl/workbook.xml','sheet.main'),('/xl/styles.xml','styles'),
                    ('/xl/worksheets/sheet1.xml','worksheet'),('/xl/worksheets/sheet2.xml','worksheet')]
+            types.extend(('/xl/comments/comment'+str(index)+'.xml','comments')
+                         for index,notes in enumerate(comments,1) if notes)
             overrides=''.join('<Override PartName="'+path+'" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.'+kind+'+xml"/>' for path,kind in types)
-            package.writestr('[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'+overrides+'<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>')
+            vml_type='<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>' if any(comments) else ''
+            package.writestr('[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'+vml_type+overrides+'<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>')
             package.writestr('_rels/.rels','<Relationships xmlns="'+REL+'"><Relationship Id="rId1" Type="'+OFF+'officeDocument" Target="xl/workbook.xml"/></Relationships>')
             entries=''.join('<sheet name='+quoteattr(sheet['name'])+' sheetId="'+str(index)+'" r:id="rId'+str(index)+'"/>' for index,sheet in enumerate(model['sheets'],1))
             package.writestr('xl/workbook.xml','<workbook xmlns="'+NS+'" xmlns:r="'+OFF[:-1]+'"><sheets>'+entries+'</sheets><calcPr calcId="191029" calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"/></workbook>')
@@ -307,6 +366,8 @@ def write_template_model(model,target):
             package.writestr('xl/styles.xml',styles.xml())
             package.writestr('xl/theme/theme1.xml',_unpack(_THEME))
             for index,sheet in enumerate(sheets,1):package.writestr('xl/worksheets/sheet'+str(index)+'.xml',sheet)
+            for index,notes in enumerate(comments,1):
+                if notes:_write_comments(package,index,notes)
         os.replace(temporary,target)
     finally:temporary.unlink(missing_ok=True)
     return target

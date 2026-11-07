@@ -19,8 +19,14 @@ from version import APP_VERSION
 
 BASE=Path(__file__).resolve().parent
 JST=timezone(timedelta(hours=9))
-PRIMARY_ACTION='4口座のPDF・円・米ドル・NISAをまとめて取得'
+PRIMARY_ACTION='全データ自動取得'
 MANUAL_CASH_KINDS=('税還','利息')
+
+
+def calendar_rows(store,activities,today=None):
+    """The desktop reads the same holding-filtered schedule as the workbook."""
+    from upcoming_calendar import schedule_rows
+    return schedule_rows(store,activities,today=today,upcoming_only=True)
 
 
 def start_schedule_bootstrap(base=BASE,popen=subprocess.Popen,platform_name=None):
@@ -110,7 +116,7 @@ class App:
         from family_profile import configure
         configure(self.store)
         self.accounts=self.store.accounts();self.buttons=[]
-        root.title(f'家族の売買記録 v{APP_VERSION}');root.geometry('1180x760');root.minsize(1020,650)
+        root.title(f'家族の売買記録 v{APP_VERSION}');root.geometry('1320x780');root.minsize(1120,650)
         root.configure(background='#f3f6fa')
         style=ttk.Style();style.theme_use('clam')
         style.configure('.',font=('Yu Gothic UI',10),foreground='#17324d')
@@ -120,44 +126,41 @@ class App:
         style.configure('Muted.TLabel',foreground='#52677d')
         style.configure('Card.TFrame',background='#ffffff')
         style.configure('Card.TLabel',background='#ffffff')
-        style.configure('Primary.TButton',font=('Yu Gothic UI',13,'bold'),padding=(18,14),foreground='#ffffff',background='#174a7b')
+        style.configure('Primary.TButton',font=('Yu Gothic UI',11,'bold'),padding=(14,8),foreground='#ffffff',background='#174a7b')
         style.map('Primary.TButton',background=[('active','#246296'),('disabled','#b4c2d0')],foreground=[('disabled','#edf2f7')])
         style.configure('Treeview',rowheight=30,font=('Yu Gothic UI',10))
         style.configure('Treeview.Heading',font=('Yu Gothic UI',10,'bold'))
-        outer=ttk.Frame(root,padding=22);outer.pack(fill='both',expand=True)
+        outer=ttk.Frame(root,padding=18);outer.pack(fill='both',expand=True)
         heading=ttk.Frame(outer);heading.pack(fill='x')
         ttk.Label(heading,text='家族の売買記録',style='Title.TLabel').pack(side='left')
         self.settings=ttk.Menubutton(heading,text='設定・補助')
         self.settings.pack(side='right');self.buttons.append(self.settings)
         self._settings_menu()
-        ttk.Label(outer,text='4口座をまとめて取得し、内容を確認してExcelへ。',style='Muted.TLabel').pack(anchor='w',pady=(4,16))
-        card=ttk.Frame(outer,style='Card.TFrame',padding=16);card.pack(fill='x')
+        ttk.Label(outer,text='4口座をまとめて取得し、内容を確認してExcelへ。',style='Muted.TLabel').pack(anchor='w',pady=(4,12))
+        card=ttk.Frame(outer,style='Card.TFrame',padding=12);card.pack(fill='x')
         button=ttk.Button(card,text=PRIMARY_ACTION,style='Primary.TButton',command=self.auto_collect)
-        button.pack(fill='x');self.buttons.append(button)
+        button.grid(row=0,column=0,rowspan=2,sticky='w',padx=(0,18));self.buttons.append(button)
+        card.columnconfigure(1,weight=1)
         self.account_status=tk.StringVar()
-        ttk.Label(card,textvariable=self.account_status,style='Card.TLabel',wraplength=1050).pack(anchor='w',pady=(10,2))
-        ttk.Label(card,text='現金・NISA枠は取得時点の値を記録します。PDFは確認してから台帳へ反映します。',style='Card.TLabel',wraplength=1050).pack(anchor='w')
-        secondary=ttk.Frame(outer);secondary.pack(fill='x',pady=(12,14))
-        for label,command in [('父のPDF取り込み',self.import_father_pdfs),('税還・利息を手動で追加',self.add_cash_entry)]:
-            button=ttk.Button(secondary,text=label,command=command,padding=(12,7))
-            button.pack(side='left',padx=(0,8));self.buttons.append(button)
-        ttk.Label(secondary,text='配当はPDFから自動で取り込みます。',style='Muted.TLabel').pack(side='left',padx=8)
-        exports=ttk.Frame(outer);exports.pack(fill='x',pady=(0,12))
-        ttk.Label(exports,text='出力対象月').pack(side='left')
-        self.month=ttk.Entry(exports,width=10);self.month.pack(side='left',padx=8)
-        ttk.Label(exports,text='YYYY-MM／空欄はすべて',style='Muted.TLabel').pack(side='left')
-        button=ttk.Button(exports,text='Excelを出力',command=self.export_excel,padding=(12,6))
-        button.pack(side='right');self.buttons.append(button)
-        self.status=tk.StringVar();ttk.Label(outer,textvariable=self.status,style='Muted.TLabel').pack(anchor='w',pady=(0,8))
+        ttk.Label(card,textvariable=self.account_status,style='Card.TLabel',wraplength=1000).grid(row=0,column=1,sticky='w',pady=(0,3))
+        ttk.Label(card,text='PDF・円・米ドル・NISA枠を取得します。登録前に内容を確認できます。',style='Card.TLabel',wraplength=1000).grid(row=1,column=1,sticky='w')
+        self.status=tk.StringVar();ttk.Label(outer,textvariable=self.status,style='Muted.TLabel').pack(anchor='w',pady=(10,4))
         self.migration_notice=tk.StringVar()
         ttk.Label(outer,textvariable=self.migration_notice,foreground='#8b5b13',wraplength=1050).pack(anchor='w')
-        list_actions=ttk.Frame(outer);list_actions.pack(fill='x',pady=(6,8))
-        ttk.Label(list_actions,text='取引一覧',style='Muted.TLabel').pack(side='left',padx=(0,14))
-        for label,command in [('保存PDFを反映',self.update_saved),('銘柄設定',self.set_security_names),('出力フォルダを開く',self.open_outputs)]:
-            button=ttk.Button(list_actions,text=label,command=command,padding=(10,5))
-            button.pack(side='left',padx=(0,8));self.buttons.append(button)
+        list_actions=ttk.Frame(outer);list_actions.pack(fill='x',pady=(6,10))
+        for label,command in [('保存PDFを反映',self.update_saved),('銘柄設定',self.set_security_names),('出力フォルダを開く',self.open_outputs),
+                              ('父のPDF取り込み',self.import_father_pdfs),('税還・利息を手動で追加',self.add_cash_entry)]:
+            button=ttk.Button(list_actions,text=label,command=command,padding=(10,6))
+            button.pack(side='left',padx=(0,7));self.buttons.append(button)
+        button=ttk.Button(list_actions,text='Excelを出力',command=self.export_excel,padding=(12,6))
+        button.pack(side='right');self.buttons.append(button)
+        panes=ttk.Panedwindow(outer,orient=tk.HORIZONTAL);panes.pack(fill='both',expand=True)
+        trade_panel=ttk.Frame(panes);calendar_panel=ttk.Frame(panes,padding=(12,0,0,0))
+        panes.add(trade_panel,weight=3);panes.add(calendar_panel,weight=2)
+        root.after(100,lambda:panes.sashpos(0,max(480,int(panes.winfo_width()*.60))))
+        ttk.Label(trade_panel,text='取引一覧',style='Muted.TLabel').pack(anchor='w',pady=(0,6))
         columns=('date','account','name','code','custody','side','qty','price','amount')
-        frame=ttk.Frame(outer);frame.pack(fill='both',expand=True)
+        frame=ttk.Frame(trade_panel);frame.pack(fill='both',expand=True)
         self.tree=ttk.Treeview(frame,columns=columns,show='headings')
         for key,label,width in zip(columns,['約定日','口座','銘柄','コード','預り','売買','数量','単価','受渡金額'],[105,85,260,75,80,50,80,100,125]):
             self.tree.heading(key,text=label)
@@ -167,7 +170,22 @@ class App:
         self.tree.configure(yscrollcommand=y.set,xscrollcommand=x.set)
         self.tree.grid(row=0,column=0,sticky='nsew');y.grid(row=0,column=1,sticky='ns');x.grid(row=1,column=0,sticky='ew')
         frame.rowconfigure(0,weight=1);frame.columnconfigure(0,weight=1)
+        ttk.Label(calendar_panel,text='これからの予定',style='Muted.TLabel').pack(anchor='w',pady=(0,6))
+        calendar_frame=ttk.Frame(calendar_panel);calendar_frame.pack(fill='both',expand=True)
+        self.calendar=ttk.Treeview(calendar_frame,columns=('date','name','kind','amount'),show='headings')
+        for key,label,width in [('date','日付',80),('name','銘柄',135),('kind','予定',125),('amount','配当金額',100)]:
+            self.calendar.heading(key,text=label)
+            self.calendar.column(key,width=width,minwidth=65,anchor='e' if key=='amount' else 'w')
+        self.calendar.tag_configure('within_month',background='#ff7c80')
+        calendar_y=ttk.Scrollbar(calendar_frame,orient='vertical',command=self.calendar.yview)
+        calendar_x=ttk.Scrollbar(calendar_frame,orient='horizontal',command=self.calendar.xview)
+        self.calendar.configure(yscrollcommand=calendar_y.set,xscrollcommand=calendar_x.set)
+        self.calendar.grid(row=0,column=0,sticky='nsew');calendar_y.grid(row=0,column=1,sticky='ns');calendar_x.grid(row=1,column=0,sticky='ew')
+        calendar_frame.rowconfigure(0,weight=1);calendar_frame.columnconfigure(0,weight=1)
+        self.calendar_status=tk.StringVar()
+        ttk.Label(calendar_panel,textvariable=self.calendar_status,style='Muted.TLabel',wraplength=450).pack(anchor='w',pady=(6,0))
         ttk.Label(outer,text='同じ日の口座・銘柄・預り・売買が同じ取引は、1行にまとめて表示・出力します。',style='Muted.TLabel').pack(anchor='w',pady=(12,3))
+        ttk.Label(outer,text='月初終値は月初の最初の取引日です。価格日はExcelのセル注記で確認できます。',style='Muted.TLabel').pack(anchor='w',pady=(0,3))
         ttk.Label(outer,text='取引原本と口座設定は保持します。データはこのアプリの data フォルダに保存します。',style='Muted.TLabel').pack(anchor='w')
         root.protocol('WM_DELETE_WINDOW',self.close)
         self.refresh_accounts();self.refresh()
@@ -175,6 +193,7 @@ class App:
         root.after(150,lambda:ensure_personal(BASE,root))
         root.after(800,lambda:retire_background_tasks(BASE))
         root.after(1500,self.check_retirement_status)
+        root.after(60000,self.refresh_calendar_periodic)
 
     def check_retirement_status(self):
         try:
@@ -238,6 +257,30 @@ class App:
                 short.get(record.get('custody',''),record.get('custody','')),short.get(record['side'],record['side']),
                 display_number(record['quantity']),display_number(record['price']),display_number(record['settlement_amount'])))
         self.status.set(f'保存済み {len(original):,}明細 → 同日合算 {len(records):,}行　／　最新500行を表示')
+        self.refresh_calendar()
+
+    def refresh_calendar(self):
+        if not hasattr(self,'calendar'):return
+        today=datetime.now(JST).date()
+        for item in self.calendar.get_children():self.calendar.delete(item)
+        try:
+            rows=calendar_rows(self.store,self.activities,today=today)
+            current=[]
+            for row in rows:
+                day=datetime.fromisoformat(row['date']).date()
+                if day>=today:current.append((day,row))
+            current.sort(key=lambda item:(item[0],item[1].get('kind',''),item[1].get('code','')))
+            for day,row in current:
+                amount=display_number(row['amount']) if row.get('amount') is not None and row.get('kind')=='配当金支払日' else ''
+                self.calendar.insert('','end',values=(f'{day.month}/{day.day}',row['name'],row['kind'],amount),
+                                     tags=('within_month',) if row.get('within_month') else ())
+            self.calendar_status.set('赤色は1か月以内の予定です。' if current else '表示できる今後の予定はありません。')
+        except (LedgerError,OSError,ValueError):
+            self.calendar_status.set('予定を表示できません。公開情報を取得してから確認してください。')
+
+    def refresh_calendar_periodic(self):
+        if not self.busy:self.refresh_calendar()
+        self.root.after(60000,self.refresh_calendar_periodic)
 
     def rename(self):
         account=self.choose_account('口座名を変更')
@@ -331,7 +374,7 @@ class App:
     def export_excel(self):
         if self.busy:return
         try:
-            month=self.month.get().strip();self.store.records(month)
+            month='';self.store.records(month)
         except (LedgerError,OSError,ValueError) as error:
             messagebox.showerror('出力できません',str(error),parent=self.root);return
         import queue,threading
@@ -362,6 +405,7 @@ class App:
                 for button in self.buttons:button.configure(state='normal')
                 dialog.destroy()
                 if kind=='done':
+                    self.refresh_calendar()
                     note='\n\n公開情報の一部は未取得です。価格は空欄、分からない支払日は未定です。' if value['public_research_incomplete'] else ''
                     messagebox.showinfo('Excelを出力しました',str(value['output'])+note,parent=self.root)
                 elif kind=='error':messagebox.showerror('出力できません',value,parent=self.root)

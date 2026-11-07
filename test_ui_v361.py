@@ -37,7 +37,7 @@ class DesktopPlacement(unittest.TestCase):
     def test_list_actions_are_visible_together_above_the_transaction_table(self):
         obj=App(self.root);widgets=self.fixture.widgets.widgets
         labels={widget.options.get('text'):widget for widget in widgets if 'text' in widget.options}
-        parent=labels['取引一覧'].parent_widget
+        parent=labels['保存PDFを反映'].parent_widget
         expected=(('保存PDFを反映','update_saved'),('銘柄設定','set_security_names'),
                   ('出力フォルダを開く','open_outputs'))
         for label,method in expected:

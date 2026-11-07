@@ -49,7 +49,7 @@ class DividendReportV36(unittest.TestCase):
         for forbidden in ('手数料・税額（円）', '株価日', '出典・確認日', '銘柄別との差', '確認状態'):
             self.assertNotIn(forbidden, [cell['v'] for cell in sheet['cells']])
         self.assertEqual(cells[1, 23]['v'], '末日終値')
-        self.assertEqual(cells[1, 24]['v'], '1日終値')
+        self.assertEqual(cells[1, 24]['v'], '月初終値')
 
     def test_blocks_have_one_template_empty_row_and_all_three_cumulative_sum_formulas(self):
         sheet = self.build(); cells = grid(sheet); blocks = sheet['blocks']
@@ -77,13 +77,15 @@ class DividendReportV36(unittest.TestCase):
 
     def test_current_month_first_close_requires_exact_first_date(self):
         self.facts({'9900': dict(close=130, close_date='2026-09-30',
-                                 month_start_close=132, month_start_close_date='2026-10-02')})
+                                 month_start_close=132, month_start_close_date='2026-10-02',
+                                 month_start_price_source='Verified fixture source')})
         cells = grid(self.build())
         row = next(row for row, column in cells if column == 11 and cells[row, column]['v'] == 9900)
         self.assertEqual(cells[row, 23]['v'], 130)
         self.assertIsNone(cells[row, 24]['v'])
         self.facts({'9900': dict(close=130, close_date='2026-08-31',
-                                 month_start_close=132, month_start_close_date='2026-10-01')})
+                                 month_start_close=132, month_start_close_date='2026-10-01',
+                                 month_start_price_source='Verified fixture source')})
         cells = grid(self.build())
         self.assertIsNone(cells[row, 23]['v'])
         self.assertEqual(cells[row, 24]['v'], 132)
@@ -128,7 +130,7 @@ class DividendReportV36(unittest.TestCase):
         amount = cells[rows[0], 14]
         self.assertEqual(amount['k'], 'formula_number')
         self.assertIn('SUMIFS(', amount['v'])
-        self.assertIn('（実績）', amount['format'])
+        self.assertEqual(amount['format'], '#,##0')
         self.assertEqual(sum(cell['v'] for (row, column), cell in cells.items()
                              if column == 9 and row > 1 and cells[row, 6]['v'] == '配当'), 150)
 
@@ -150,7 +152,7 @@ class DividendReportV36(unittest.TestCase):
         self.assertEqual(cells[first_upcoming, 11]['v'], '2026-11-10')
         self.assertTrue(all(cell.get('fill') is None for cell in sheet['cells']))
 
-    def test_verified_nisa_forecast_uses_remaining_entitled_shares_and_numeric_forecast_tag(self):
+    def test_verified_nisa_forecast_uses_remaining_entitled_shares_and_numeric_format(self):
         self.facts({'9900': dict(calendar_complete=True,
                                  events=[dict(rights='2026-11-25', payment='2026-12-15', dps=2)])})
         sheet = self.build(); cells = grid(sheet); blocks = sheet['blocks']
@@ -158,7 +160,7 @@ class DividendReportV36(unittest.TestCase):
                        if cells[row, 11]['v'] == '2026-12-15')
         self.assertEqual(cells[payment, 14]['k'], 'number')
         self.assertEqual(cells[payment, 14]['v'], 150)
-        self.assertIn('（予想）', cells[payment, 14]['format'])
+        self.assertEqual(cells[payment, 14]['format'], '#,##0')
         summary_row = next(row for row, column in cells if column == 11 and cells[row, column]['v'] == 9900)
         self.assertEqual(cells[summary_row, 20]['v'], 150)
 

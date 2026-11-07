@@ -82,7 +82,10 @@ def _day(value):
     if not isinstance(value, str):
         return None
     text = unicodedata.normalize('NFKC', value).strip()
-    if 'T' in text:
+    # Public tables may append a Japanese weekday or emit an ISO midnight
+    # timestamp. Neither changes the exchange calendar date being requested.
+    text=re.sub(r'\s*\([月火水木金土日](?:曜(?:日)?)?\)$','',text)
+    if 'T' in text or re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}',text):
         try:
             stamp = datetime.fromisoformat(text.replace('Z','+00:00'))
             return (stamp.astimezone(JST) if stamp.tzinfo else stamp).date()
@@ -269,13 +272,15 @@ def parse_yahoo_history(text, code):
 
 def yahoo_japan_month_closes(code, month, opener=None, now=None):
     code = domestic_code(code); first = date.fromisoformat(month + '-01')
+    from jpx_calendar import first_trading_day,CALENDAR_SOURCE
+    opening = first_trading_day(month)
     moment = now or datetime.now(JST)
     if moment.tzinfo is None or first > moment.astimezone(JST).date():
         raise PublicReferenceError('対象月の終値はまだ確認できません。')
     moment = moment.astimezone(JST); previous = first - timedelta(days=1)
     url = f'https://finance.yahoo.co.jp/quote/{code}.T/history?' + urlencode({
         'from': previous.replace(day=1).strftime('%Y%m%d'),
-        'to': (first + timedelta(days=1)).strftime('%Y%m%d'), 'timeFrame': 'd'})
+        'to': (opening + timedelta(days=1)).strftime('%Y%m%d'), 'timeFrame': 'd'})
     text, source = public_text(url, opener=opener)
     bars = parse_yahoo_history(text, code)
     older = [(day, amount) for day, amount in bars if 0 <= (previous-day).days <= 7]
@@ -289,6 +294,12 @@ def yahoo_japan_month_closes(code, month, opener=None, now=None):
         day, amount = exact[0]
         result.update(month_start_close=amount, month_start_close_date=day.isoformat(),
                       month_start_price_source=source)
+    ready = opening < moment.date() or opening == moment.date() and (moment.hour,moment.minute) >= (16,0)
+    exact = [(day,amount) for day,amount in bars if day == opening]
+    if ready and len(exact) == 1:
+        day,amount = exact[0]
+        result.update(month_open_close=amount,month_open_close_date=day.isoformat(),
+                      month_open_price_source=source,month_open_calendar_source=CALENDAR_SOURCE)
     if not result:
         raise PublicReferenceError('Yahoo時系列に対象日の終値を確認できません。')
     return result
@@ -548,11 +559,17 @@ def _write_research(directory, year, data):
 
 def _needs_prices(fact, first, moment):
     previous = first-timedelta(days=1)
-    prior = _day(fact.get('close_date'));start = _day(fact.get('month_start_close_date'))
-    ready = first < moment.date() or (moment.hour,moment.minute) >= (16,0)
+    from jpx_calendar import first_trading_day
+    opening = first_trading_day(first.strftime('%Y-%m'))
+    prior = _day(fact.get('close_date'))
+    ready = opening < moment.date() or opening == moment.date() and (moment.hour,moment.minute) >= (16,0)
     prior_known = (prior is not None and 0 <= (previous-prior).days <= 7
                    and prior < first and (_amount(fact.get('close')) or 0) > 0)
-    start_known = start == first and (_amount(fact.get('month_start_close')) or 0) > 0
+    start_known=False
+    for prefix in ['month_open']+(['month_start'] if opening==first else []):
+        start=_day(fact.get(prefix+'_close_date'));amount=fact.get(prefix+'_close');source=fact.get(prefix+'_price_source')
+        if start==opening and (_amount(amount) or 0)>0 and isinstance(source,str) and source.strip():
+            start_known=True;break
     return not prior_known or ready and not start_known
 
 
@@ -623,7 +640,7 @@ def refresh_public_research(directory, codes, month, *, cancelled=lambda:False,
     if cancelled():return dict(result, cancelled=True, failed=codes)
     if not old_prices.get('_load_error'):
         merged = refresh_month_closes(directory, codes, month, provider=lambda code, selected:prices.get(code, {}),
-                                      cancelled=cancelled, budget_seconds=2, now=moment)
+                                      cancelled=cancelled, budget_seconds=2, now=moment,include_month_open=True)
         result['updated'] += merged['updated'];result['written'] |= merged['written']
         errors['price'].update(merged['failed'])
     # Reload after prices: selected month may share the same year's file.

@@ -52,7 +52,9 @@ def reference(**extra):
 def prices(**extra):
     value=dict(close=120,close_date='2026-10-30',price_source='Synthetic Yahoo historical',
                month_start_close=125,month_start_close_date='2026-11-01',
-               month_start_price_source='Synthetic literal first-day fixture')
+               month_start_price_source='Synthetic literal first-day fixture',
+               month_open_close=125,month_open_close_date='2026-11-02',
+               month_open_price_source='Synthetic first trading-day fixture')
     value.update(extra);return value
 
 
@@ -66,7 +68,7 @@ class YahooJapanHistory(unittest.TestCase):
         self.assertEqual(result['close'],120);self.assertEqual(result['month_start_close'],125)
         self.assertIn('/9900.T/history?',result['price_source'])
         self.assertIn('from=20261001',opener.call_args.args[0].full_url)
-        self.assertIn('to=20261102',opener.call_args.args[0].full_url)
+        self.assertIn('to=20261103',opener.call_args.args[0].full_url)
 
     def test_holiday_has_no_literal_first_day_price_and_next_day_is_not_substituted(self):
         text=yahoo_html([('2026/10/30',1,2,0,120,999,777),('2026/11/2',1,2,0,999,999,888)])
@@ -245,15 +247,21 @@ class CombinedResearchRefresh(unittest.TestCase):
                                        dividend_provider=options.pop('dividend_provider',Mock(return_value=reference())),**options)
 
     def test_prices_and_payment_dates_persist_together_without_overwriting_either(self):
-        self.seed({'9900':dict(dps=12,source='Manual',calendar_complete=True,events=[dict(rights='2026-09-28',dps=5)])})
+        # The old literal-day cache is preserved independently; the new opening
+        # observation is acquired for Monday, without relabeling that old value.
+        legacy={key:value for key,value in prices().items() if key.startswith('month_start_')}
+        self.seed({'9900':dict(legacy,dps=12,source='Manual',calendar_complete=True,events=[dict(rights='2026-09-28',dps=5)])})
         result=self.refresh();self.assertTrue(result['written']);self.assertEqual(result['failed'],[])
         fact=load_research(self.base,2026)['securities']['9900']
         self.assertEqual(fact['close'],120);self.assertEqual(fact['month_start_close'],125)
+        self.assertEqual(fact['month_start_close_date'],'2026-11-01')
+        self.assertEqual(fact['month_open_close'],125);self.assertEqual(fact['month_open_close_date'],'2026-11-02')
         self.assertEqual(fact['events'][0]['payment'],'2026-11-26');self.assertEqual(fact['dps'],12)
 
     def test_current_year_dividends_are_independent_of_selected_prior_year_price_period(self):
         result=refresh_public_research(self.base,['9900'],'2025-11',now=NOW,
-                  price_provider=Mock(return_value=prices(close_date='2025-10-31',month_start_close_date='2025-11-01')),
+                  price_provider=Mock(return_value=prices(close_date='2025-10-31',month_start_close_date='2025-11-01',
+                                                        month_open_close_date='2025-11-04')),
                   dividend_provider=Mock(return_value=reference()))
         self.assertTrue(result['written']);self.assertTrue((self.folder/'research_2025.json').is_file())
         self.assertIn('2026-11-26',load_research(self.base,2026)['securities']['9900']['payments'])

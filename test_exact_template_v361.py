@@ -65,7 +65,7 @@ def synthetic_model():
         dividend['cells'].extend([cell(row,11,f'2026-11-{row-13:02d}','date',format='m/d'),
                                   cell(row,12,'Example Security'),
                                   cell(row,13,'配当金支払日' if row>=23 else '権利付き最終日')])
-    dividend['cells'].extend([cell(23,14,100,'number',format='#,##0"（実績）"'),
+    dividend['cells'].extend([cell(23,14,'SUM(I2:I2)','formula_number',format='#,##0"（実績）"'),
                               cell(24,14,200,'number',format='#,##0"（予想）"')])
     apply_template_layout([trade,dividend])
     return dict(as_of='2026-11-30',layout=LAYOUT,sheets=[trade,dividend])
@@ -167,6 +167,7 @@ class ExactUploadedTemplate(unittest.TestCase):
         self.assertEqual(self.trade.find('.//x:c[@r="S2"]/x:v',X).text,'123.45')
         self.assertEqual(self.trade.find('.//x:c[@r="K2"]/x:f',X).text,'2')
         self.assertEqual(self.trade.find('.//x:c[@r="O1"]/x:v',X).text,str((date(2026,11,7)-date(1899,12,30)).days))
+        self.assertEqual(self.dividend.find('.//x:c[@r="X1"]/x:is/x:t',X).text,'月初終値')
 
     def test_dividend_total_annual_and_cumulative_fills_match(self):
         for reference,expected in {'K11':8,'S11':22,'T11':25,'U11':25,'V11':23,'W11':3,'X11':3,
@@ -180,16 +181,37 @@ class ExactUploadedTemplate(unittest.TestCase):
             self.assertTrue(all(node.find('x:v',X) is None and node.find('x:is',X) is None and node.find('x:f',X) is None
                                 for node in right_cells))
 
-    def test_calendar_only_overrides_explicit_date_and_forecast_formats(self):
+    def test_calendar_dates_and_plain_payment_numbers_preserve_source_font_and_alignment(self):
         xfs=list(self.styles.find('x:cellXfs',X))
         formats={node.get('numFmtId'):node.get('formatCode') for node in self.styles.find('x:numFmts',X)}
-        for reference,base,expected in (('K21',10,'m/d'),('N24',16,'#,##0"（予想）"')):
+        for reference,base,expected in (('K21',10,'m/d'),('N23',16,'#,##0'),('N24',16,'#,##0')):
             actual=xfs[self.style(self.dividend,reference)];original=xfs[base]
             self.assertEqual(formats[actual.get('numFmtId')],expected)
             for key in ('fontId','fillId','borderId','xfId'):self.assertEqual(actual.get(key),original.get(key))
             self.assertEqual(structural_value(actual.find('x:alignment',X)),
                              structural_value(original.find('x:alignment',X)))
-        self.assertEqual(self.style(self.dividend,'N23'),16)
+        self.assertEqual(self.style(self.dividend,'N23'),self.style(self.dividend,'N24'))
+        self.assertEqual(self.dividend.find('.//x:c[@r="N23"]/x:f',X).text,'SUM(I2:I2)')
+        self.assertEqual(self.dividend.find('.//x:c[@r="N24"]/x:v',X).text,'200')
+        self.assertEqual({value for key,value in formats.items() if int(key)>181},{'m/d','#,##0'})
+
+    def test_calendar_numeric_constants_and_formulas_never_get_a_payment_suffix(self):
+        amount=next(current for current in self.model['sheets'][1]['cells']
+                    if (current['r'],current['c'])==(23,14))
+        for kind,value,hint in (('number',0,None),('number',125.5,'General'),
+                                ('formula_number','SUM(I2:I2)','#,##0"（実績）"'),
+                                ('formula_number','I2*2','#,##0"（予想）"')):
+            with self.subTest(kind=kind,value=value):
+                amount.update(k=kind,v=value,format=hint)
+                output=write_model(self.model,self.directory)
+                with ZipFile(output) as archive:
+                    worksheet=ET.fromstring(archive.read('xl/worksheets/sheet2.xml'))
+                    styles=ET.fromstring(archive.read('xl/styles.xml'))
+                current=worksheet.find('.//x:c[@r="N23"]',X)
+                style=list(styles.find('x:cellXfs',X))[int(current.get('s'))]
+                formats={node.get('numFmtId'):node.get('formatCode') for node in styles.find('x:numFmts',X)}
+                self.assertEqual(formats[style.get('numFmtId')],'#,##0')
+                self.assertEqual(current.find('x:f' if kind.startswith('formula_') else 'x:v',X).text,str(value))
 
     def test_all_calendar_events_within_one_month_get_the_template_red(self):
         rule=self.dividend.find('x:conditionalFormatting/x:cfRule',X)
@@ -209,6 +231,75 @@ class ExactUploadedTemplate(unittest.TestCase):
         with ZipFile(output) as archive:
             current=ET.fromstring(archive.read('xl/worksheets/sheet1.xml')).find('.//x:c[@r="C5"]',X)
         self.assertEqual(current.get('t'),'inlineStr');self.assertIsNone(current.find('x:f',X))
+
+    def test_price_note_is_escaped_hidden_and_does_not_change_worksheet_geometry(self):
+        note='価格日:2026-11-02\n出典:https://example.invalid/history?a=1&b=<value>\n</t><comment ref="A1">'
+        price=next(current for current in self.model['sheets'][1]['cells']
+                   if (current['r'],current['c'])==(2,24))
+        price['comment']=note
+        output=write_model(self.model,self.directory)
+        with ZipFile(output) as archive:
+            comments=ET.fromstring(archive.read('xl/comments/comment2.xml'))
+            worksheet=ET.fromstring(archive.read('xl/worksheets/sheet2.xml'))
+            drawing=ET.fromstring(archive.read('xl/drawings/commentsDrawing2.vml'))
+            relationships=ET.fromstring(archive.read('xl/worksheets/_rels/sheet2.xml.rels'))
+            content_types=ET.fromstring(archive.read('[Content_Types].xml'))
+            self.assertEqual(archive.read('xl/styles.xml'),self.archive.read('xl/styles.xml'))
+        all_comments=comments.findall('x:commentList/x:comment',X)
+        self.assertEqual(len(all_comments),1);self.assertEqual(all_comments[0].get('ref'),'X2')
+        self.assertEqual(all_comments[0].get('authorId'),'0')
+        self.assertEqual(all_comments[0].find('x:text/x:t',X).text,note)
+        self.assertEqual(comments.find('x:authors/x:author',X).text,'家族の売買記録')
+        for tag in ('sheetViews','sheetFormatPr','cols','pageMargins'):
+            self.assertEqual(structural_value(worksheet.find('x:'+tag,X)),
+                             structural_value(self.dividend.find('x:'+tag,X)))
+        self.assertEqual(worksheet.find('x:legacyDrawing',X).get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'),
+                         'commentsVml')
+        self.assertEqual({node.get('Target') for node in relationships},
+                         {'../comments/comment2.xml','../drawings/commentsDrawing2.vml'})
+        self.assertTrue(all(node.get('TargetMode')!='External' for node in relationships))
+        shape=drawing.find('{urn:schemas-microsoft-com:vml}shape')
+        self.assertIn('visibility:hidden',shape.get('style'))
+        client=shape.find('{urn:schemas-microsoft-com:office:excel}ClientData')
+        self.assertEqual(client.find('{urn:schemas-microsoft-com:office:excel}Row').text,'1')
+        self.assertEqual(client.find('{urn:schemas-microsoft-com:office:excel}Column').text,'23')
+        types={node.get('PartName'):node.get('ContentType') for node in content_types if node.get('PartName')}
+        self.assertEqual(types['/xl/comments/comment2.xml'],
+                         'application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml')
+        self.assertFalse(any(node.get('PartName')=='/xl/comments/comment1.xml' for node in content_types))
+
+    def test_comments_on_both_sheets_have_independent_internal_relationships(self):
+        for sheet,position in ((self.model['sheets'][0],(1,15)),(self.model['sheets'][1],(2,24))):
+            next(current for current in sheet['cells'] if (current['r'],current['c'])==position)['comment']='Synthetic note'
+        output=write_model(self.model,self.directory)
+        with ZipFile(output) as archive:
+            for index,reference in ((1,'O1'),(2,'X2')):
+                comments=ET.fromstring(archive.read(f'xl/comments/comment{index}.xml'))
+                self.assertEqual(comments.find('x:commentList/x:comment',X).get('ref'),reference)
+                self.assertIn(f'xl/drawings/commentsDrawing{index}.vml',archive.namelist())
+                self.assertIn(f'xl/worksheets/_rels/sheet{index}.xml.rels',archive.namelist())
+
+    def test_comment_files_are_absent_without_a_nonempty_note(self):
+        price=next(current for current in self.model['sheets'][1]['cells']
+                   if (current['r'],current['c'])==(2,24))
+        for value in (None,'','\x00'):
+            price['comment']=value;output=write_model(self.model,self.directory)
+            with ZipFile(output) as archive:
+                self.assertFalse(any(name.startswith('xl/comments/') or name.endswith('.vml')
+                                     or name.startswith('xl/worksheets/_rels/') for name in archive.namelist()))
+                self.assertNotIn(b'vmlDrawing',archive.read('[Content_Types].xml'))
+                self.assertNotIn(b'legacyDrawing',archive.read('xl/worksheets/sheet2.xml'))
+
+    def test_invalid_note_does_not_replace_existing_output(self):
+        target=self.directory/'existing.xlsx';target.write_bytes(b'unchanged existing output')
+        price=next(current for current in self.model['sheets'][1]['cells']
+                   if (current['r'],current['c'])==(2,24))
+        for value in ({'unexpected':'object'},'x'*32768):
+            with self.subTest(value_type=type(value).__name__):
+                price['comment']=value
+                with self.assertRaises(ValueError):write_template_model(self.model,target)
+                self.assertEqual(target.read_bytes(),b'unchanged existing output')
+                self.assertFalse(target.with_suffix('.tmp').exists())
 
     def test_invalid_value_cannot_replace_existing_output(self):
         target=self.directory/'existing.xlsx';target.write_bytes(b'unchanged existing output')

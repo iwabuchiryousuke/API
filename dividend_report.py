@@ -11,7 +11,7 @@ import unicodedata
 
 from cost_basis import calculate
 from custody_labels import event_label
-from date_highlights import dates_in, months_after
+from date_highlights import dates_in
 from dividend_forecast import forecast
 from market_data import load_research
 from report_legacy import col, code, reporting_code
@@ -23,7 +23,7 @@ SUMMARY_START = 11
 SUMMARY_HEADERS = (
     'コード', '銘柄', '権利付き最終日', '配当金支払日', '本決算発表日',
     '株数', 'DPS', '配当利回', '実績', '予想(税後)', '年間予想',
-    '累計配当金', '末日終値', '1日終値',
+    '累計配当金', '末日終値', '月初終値',
 )
 _INCOME = ('配当', '税還付', '税還', '利息')
 _CLASS_ORDER = {'権利付き最終日': 0, '配当金支払日': 1, '本決算発表日': 2}
@@ -110,6 +110,41 @@ def _price(fact, value_key, date_key, target, previous=False, known_through=None
         return None
 
 
+def _month_open_price(fact, first, today, clock=None):
+    """Use the calendar-confirmed opening trading day, never the earliest bar."""
+    from jpx_calendar import first_trading_day
+    try:
+        expected = first_trading_day(first.strftime('%Y-%m'))
+    except ValueError:
+        return None, None, None
+    if expected > today or (clock is not None and expected == today and (clock.hour, clock.minute) < (16, 0)):
+        return None, None, None
+    source = fact.get('month_open_price_source')
+    value = (_price(fact, 'month_open_close', 'month_open_close_date', expected, known_through=today)
+             if isinstance(source, str) and source.strip() else None)
+    if value is not None:
+        return value, expected.isoformat(), fact.get('month_open_price_source')
+    # Older caches represented the literal first day. They establish the new
+    # observation only in a month whose first calendar day actually traded.
+    if expected == first:
+        source = fact.get('month_start_price_source')
+        value = (_price(fact, 'month_start_close', 'month_start_close_date', expected, known_through=today)
+                 if isinstance(source, str) and source.strip() else None)
+        if value is not None:
+            return value, expected.isoformat(), fact.get('month_start_price_source')
+    return None, None, None
+
+
+def _price_comment(cell, stamp, source=None):
+    if cell['v'] is None or not stamp:
+        return
+    text = '価格日: ' + stamp
+    if isinstance(source, str) and source.strip():
+        safe = ''.join(character for character in source.strip() if ord(character) >= 32 or character in '\n\t')
+        text += '\n出典: ' + safe[:2000]
+    cell['comment'] = text
+
+
 def _forecast_amounts(store, activities, predicted, lines):
     """Retain the existing verified entitlement/custody policy for forecasts."""
     states = {}
@@ -152,7 +187,11 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
     receipt totals always come from the original durable activity records.
     """
     day = _day(as_of)
-    today = _day(today) if today is not None else datetime.now(JST).date()
+    current_clock = datetime.now(JST)
+    clock = (today.astimezone(JST) if isinstance(today, datetime) and today.tzinfo else today
+             if isinstance(today, datetime) else current_clock
+             if today is None or _day(today) == current_clock.date() else None)
+    today = _day(today) if today is not None else current_clock.date()
     first = day.replace(day=1)
     previous = first - timedelta(days=1)
     source = trade_data if hasattr(trade_data, 'records') else store
@@ -184,7 +223,6 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
     for ident in names:
         if ident not in eligible:
             predicted[ident] = None
-    forecast_amounts = _forecast_amounts(source, activities, predicted, forecast_lines)
 
     sheet = dict(name='配当', cells=[], widths={}, merges=[], filter=None, chart=None,
                  row_height=24, header_height=44.1, conditional_formats=[])
@@ -207,7 +245,6 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
         put(1, column, title)
     actual = defaultdict(Decimal)
     cumulative = defaultdict(Decimal)
-    actual_payments = defaultdict(Decimal)
     for row, entry in enumerate(sorted(events, key=lambda value: (
             value['date'], value.get('account', ''), _ident(value), value['type']), reverse=True), 2):
         if entry.get('currency', 'JPY') != 'JPY':
@@ -229,7 +266,6 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
             cumulative[ident] += amount
             if entry['date'][:4] == str(day.year):
                 actual[ident] += amount
-            actual_payments[(ident, entry['date'])] += amount
 
     end_detail = max(2, len(events) + 1)
     position_warnings = {str(reporting_code(row))
@@ -266,9 +302,9 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
         formula(row, 21, f'IF(ISNUMBER(T{row}),SUM(S{row}:T{row}),"")')
         formula(row, 22, f'SUMIFS({criteria})')
         prev_price = _price(fact, 'close', 'close_date', previous, previous=True, known_through=today)
-        first_price = _price(fact, 'month_start_close', 'month_start_close_date', first, known_through=today)
-        put(row, 23, prev_price, 'number')
-        put(row, 24, first_price, 'number')
+        first_price, first_stamp, first_source = _month_open_price(fact, first, today, clock=clock)
+        _price_comment(put(row, 23, prev_price, 'number'), fact.get('close_date'), fact.get('price_source'))
+        _price_comment(put(row, 24, first_price, 'number'), first_stamp, first_source)
 
     summary_last = max(3, len(ordered) + 2)
     put(summary_last, 11, '合計')
@@ -306,40 +342,23 @@ def build_dividend_sheet(store, activities, as_of, today=None, trade_data=None):
 
     calendar_label = grand_total + 2
     put(calendar_label, 11, today.year, 'number', format='0')
-    calendar = {}
-    for ident in ordered:
-        fact = calendar_facts.get(ident, {})
-        for key, kind in (('rights', '権利付き最終日'), ('payments', '配当金支払日'), ('earnings', '本決算発表日')):
-            for stamp in _calendar_dates(fact, key, today.year):
-                calendar[(stamp, ident, kind)] = None
-    for (ident, stamp), amount in actual_payments.items():
-        if _day(stamp).year == today.year:
-            calendar[(_day(stamp), ident, '配当金支払日')] = None
-    calendar_rows = sorted(calendar, key=lambda item: (item[0], _CLASS_ORDER[item[2]], item[1]))
-    if len(calendar_rows) > 9998:
-        raise ValueError('カレンダーが9998行を超えます。出力範囲を確認してください。')
+    from upcoming_calendar import schedule_rows
+    calendar_rows = schedule_rows(store, activities, today=today, as_of=day, trade_data=source)
     highlights = []
-    highlight_until = months_after(today, 1)
-    for row, (stamp, ident, kind) in enumerate(calendar_rows, calendar_label + 1):
-        put(row, 11, stamp.isoformat(), 'date', format='m/d')
-        put(row, 12, names[ident])
-        put(row, 13, kind)
-        amount = None
-        style = '#,##0'
-        if kind == '配当金支払日':
-            key = (ident, stamp.isoformat())
-            if key in actual_payments:
+    for row, entry in enumerate(calendar_rows, calendar_label + 1):
+        ident = entry['code']
+        put(row, 11, entry['date'], 'date', format='m/d')
+        put(row, 12, entry['name'])
+        put(row, 13, entry['kind'])
+        if entry['kind'] == '配当金支払日' and entry['amount'] is not None:
+            if entry['amount_kind'] == '実績':
                 formula(row, 14,
                     f'SUMIFS($I$2:$I${end_detail},$D$2:$D${end_detail},{code(ident) if ident.isdigit() else chr(34)+ident.replace(chr(34),chr(34)*2)+chr(34)},'
                     f'$F$2:$F${end_detail},"配当",$A$2:$A${end_detail},K{row})',
-                    format='#,##0"（実績）"')
-            elif stamp > day and stamp.year == day.year and predicted.get(ident) is not None and any(
-                    entry.get('payment') == stamp.isoformat() and entry.get('payment_year') in (None, day.year)
-                    for entry in facts.get(ident, {}).get('events', []) if isinstance(entry, dict)):
-                amount = forecast_amounts.get(key, Decimal(0))
-                style = '#,##0"（予想）"'
-                put(row, 14, amount, 'number', format=style)
-        if today <= stamp <= highlight_until:
+                    format='#,##0')
+            else:
+                put(row, 14, entry['amount'], 'number', format='#,##0')
+        if entry['within_month']:
             highlights.append(row)
     if calendar_rows:
         start_row = calendar_label + 1

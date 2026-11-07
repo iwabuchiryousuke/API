@@ -42,8 +42,10 @@ def load_research(directory,year):
         for fact in value['securities'].values():
             for key in ('name','rights','payments','earnings','status','source'):
                 if fact.get(key) is not None and not isinstance(fact[key],str):raise ValueError()
-            for key in ('dps','close','month_start_close'):amount(fact.get(key))
-            for key in ('close_date','month_start_close_date'):iso_day(fact.get(key))
+            for key in ('dps','close','month_start_close','month_open_close'):amount(fact.get(key))
+            for key in ('close_date','month_start_close_date','month_open_close_date'):iso_day(fact.get(key))
+            for key in ('price_source','month_start_price_source','month_open_price_source','month_open_calendar_source'):
+                if fact.get(key) is not None and not isinstance(fact[key],str):raise ValueError()
             if fact.get('calendar_complete') is not None and type(fact['calendar_complete']) is not bool:raise ValueError()
             if fact.get('no_dividend') is not None:
                 if type(fact['no_dividend']) is not bool:raise ValueError()
@@ -64,11 +66,13 @@ def load_research(directory,year):
         return {'year':year,'securities':{},'_load_error':True}
 
 
-def refresh_month_closes(directory,codes,month,provider=None,cancelled=lambda:False,budget_seconds=25,now=None):
+def refresh_month_closes(directory,codes,month,provider=None,cancelled=lambda:False,budget_seconds=25,now=None,include_month_open=False):
     """Fill missing dated public prices; caller supplies an isolated stage dir.
 
     Existing verified dates, dividend plans and manual facts remain intact.
-    A missing first-day trading bar is never shifted to the following day.
+    Legacy day-one fields remain literal. ``include_month_open`` additionally
+    accepts only the expected JPX first trading day's dated, sourced close;
+    missing opening bars are never replaced by a later observed quote.
     """
     first=date.fromisoformat(month+'-01');year=first.year
     if first.strftime('%Y-%m')!=month:raise ValueError('対象月をYYYY-MMで指定してください。')
@@ -79,6 +83,12 @@ def refresh_month_closes(directory,codes,month,provider=None,cancelled=lambda:Fa
     moment=moment.astimezone(jst)
     if first>moment.date():return {'updated':0,'failed':codes,'written':False}
     first_ready=first<moment.date() or (moment.hour,moment.minute)>=(16,0)
+    if type(include_month_open) is not bool:raise ValueError('月初営業日の取得条件を確認してください。')
+    if include_month_open:
+        from jpx_calendar import first_trading_day,CALENDAR_SOURCE
+        opening=first_trading_day(month)
+        opening_ready=opening<moment.date() or opening==moment.date() and (moment.hour,moment.minute)>=(16,0)
+    else:opening=None;opening_ready=False
     data=load_research(directory,year)
     if data.get('_load_error'):return {'updated':0,'failed':codes,'written':False}
     from yahoo_market import month_closes
@@ -92,9 +102,23 @@ def refresh_month_closes(directory,codes,month,provider=None,cancelled=lambda:Fa
             return (stamp.year==previous.year and stamp.month==previous.month and
                     0<=(previous-stamp).days<=7) if prev else first_ready and stamp==first
         except (KeyError,TypeError,ValueError,OverflowError):return False
+    def opening_candidate(fact):
+        if not opening_ready:return None
+        prefixes=['month_open']+(['month_start'] if opening==first else [])
+        for prefix in prefixes:
+            try:
+                value=fact.get(prefix+'_close');stamp=fact.get(prefix+'_close_date')
+                source=fact.get(prefix+'_price_source')
+                if (not isinstance(value,bool) and math.isfinite(float(value)) and float(value)>0
+                        and date.fromisoformat(stamp)==opening and isinstance(source,str) and source.strip()):
+                    return value,source
+            except (TypeError,ValueError,OverflowError):continue
+        return None
     for code in codes:
         fact=facts.get(code,{})
-        need=(not known(fact,'close','close_date',True),first_ready and not known(fact,'month_start_close','month_start_close_date'))
+        need=(not known(fact,'close','close_date',True),
+              first_ready and (not include_month_open or opening==first) and not known(fact,'month_start_close','month_start_close_date'),
+              include_month_open and opening_ready and opening_candidate(fact) is None)
         if any(need):targets[code]=need
     if not targets:return {'updated':0,'failed':[],'written':False}
     if isinstance(budget_seconds,bool) or not isinstance(budget_seconds,(int,float)) or not math.isfinite(budget_seconds) or budget_seconds<=0:
@@ -124,6 +148,7 @@ def refresh_month_closes(directory,codes,month,provider=None,cancelled=lambda:Fa
     updated=0
     for code,value in received.items():
         old=dict(facts.get(code,{}));changed=False
+        supplied=True
         for needed,key,date_key,source_key,prev in (
                 (targets[code][0],'close','close_date','price_source',True),
                 (targets[code][1],'month_start_close','month_start_close_date','month_start_price_source',False)):
@@ -131,8 +156,18 @@ def refresh_month_closes(directory,codes,month,provider=None,cancelled=lambda:Fa
                 old[key]=value[key];old[date_key]=value[date_key]
                 if isinstance(value.get(source_key),str):old[source_key]=value[source_key]
                 changed=True
+            elif needed:supplied=False
+        if targets[code][2]:
+            candidate=opening_candidate(value)
+            if candidate is not None:
+                old['month_open_close']=candidate[0]
+                old['month_open_close_date']=opening.isoformat()
+                old['month_open_price_source']=candidate[1]
+                old['month_open_calendar_source']=CALENDAR_SOURCE
+                changed=True
+            else:supplied=False
         if changed:facts[code]=old;updated+=1
-        elif code not in failed:failed.append(code)
+        if (not changed or include_month_open and not supplied) and code not in failed:failed.append(code)
     if not updated:return {'updated':0,'failed':sorted(failed),'written':False}
     folder=Path(directory)/'market';folder.mkdir(parents=True,exist_ok=True)
     target=folder/f'research_{year}.json'

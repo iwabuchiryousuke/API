@@ -40,11 +40,12 @@ class DividendReportV361(unittest.TestCase):
     def test_exact_template_headers_and_removed_status_column_pack_to_w_and_x(self):
         self.facts({'9900': {'status': 'This private research status must stay invisible',
                               'close': 130, 'close_date': '2026-09-30',
-                              'month_start_close': 132, 'month_start_close_date': '2026-10-01'}})
+                              'month_start_close': 132, 'month_start_close_date': '2026-10-01',
+                              'month_start_price_source': 'Verified fixture source'}})
         sheet = self.build(); cells = grid(sheet)
         expected = ('コード', '銘柄', '権利付き最終日', '配当金支払日', '本決算発表日',
                     '株数', 'DPS', '配当利回', '実績', '予想(税後)', '年間予想',
-                    '累計配当金', '末日終値', '1日終値')
+                    '累計配当金', '末日終値', '月初終値')
         self.assertEqual(SUMMARY_HEADERS, expected)
         self.assertEqual(tuple(cells[1, column]['v'] for column in range(11, 25)), expected)
         self.assertEqual((cells[1, 8]['v'], cells[1, 9]['v']), ('単価(円)', '受取額(円)'))
@@ -99,7 +100,7 @@ class DividendReportV361(unittest.TestCase):
         self.assertEqual([cells[row, column]['v'] for column in (13, 14)], ['11/25', '12/15'])
         payment = next(row for row in self.calendar_rows(sheet) if cells[row, 11]['v'] == '2026-12-15')
         self.assertEqual(cells[payment, 14]['v'], 150)
-        self.assertIn('予想', cells[payment, 14]['format'])
+        self.assertEqual(cells[payment, 14]['format'], '#,##0')
         self.assertFalse(any('investing.com' in str(cell['v']) for cell in sheet['cells']))
 
     def test_public_ex_date_without_verified_rights_does_not_become_entitlement_or_zero_cash(self):
@@ -210,6 +211,7 @@ class DividendReportV361(unittest.TestCase):
         self.assertTrue(all(cell.get('fill') is None for cell in sheet['cells']))
 
     def test_one_month_window_clamps_at_february_end_not_thirty_day_guess(self):
+        self.activities.add_cash('A', '配当', '2026-01-15', '1', 'Example Security', code='9900')
         self.facts({'9900': {'rights': '2026-02-28・2026-03-01'}})
         sheet = self.build(today=date(2026, 1, 31)); cells = grid(sheet)
         stamps = [cells[row, 11]['v'] for row in sheet['blocks']['calendar_highlight_rows']]
@@ -223,7 +225,7 @@ class DividendReportV361(unittest.TestCase):
             if cells[row, 13]['v'] == '配当金支払日':
                 self.assertEqual(cells[row, 14]['k'], 'formula_number')
                 self.assertIn('SUMIFS', cells[row, 14]['v'])
-                self.assertIn('実績', cells[row, 14]['format'])
+                self.assertEqual(cells[row, 14]['format'], '#,##0')
             else:
                 self.assertNotIn((row, 14), cells)
 
