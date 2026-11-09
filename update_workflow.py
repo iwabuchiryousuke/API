@@ -252,7 +252,11 @@ class Workflow:
                     self.state['warnings'].extend(daily['warnings'])
                 for account in (selected if include_saved_pdfs else ()):
                     self.check_cancel();self.emit('CHECKING_PDF',account)
-                    known={r[0] for table in ('imports','activity_files','balance_reports') for r in stage.db.execute(f'SELECT digest FROM {table} WHERE account=?',(account,))}
+                    known={r[0] for table in ('imports','balance_reports') for r in stage.db.execute(f'SELECT digest FROM {table} WHERE account=?',(account,))}
+                    # Old versions marked a whole notice PDF complete after
+                    # its first dividend. Revisit those files once, and skip
+                    # only manifests proven complete by the current reader.
+                    known.update(activities.completed_notice_digests(account))
                     paths=sorted((self.base/'data'/'電子ポストPDF'/account).glob('*.pdf'))
                     for path in paths:
                         self.check_cancel();digest=source_digest(path);sources.append((path,digest))
@@ -278,7 +282,11 @@ class Workflow:
                         if doc.digest!=digest:raise UpdateError('SOURCE_CHANGED','検査中にPDFが変更されました。もう一度実行してください。')
                         added,existing,already=_apply(stage,activities,account,kind,doc);known.add(digest)
                         summary.new_pdf_files+=not already
-                        proposal.append({'account':account,'name':path.name,'kind':kind,'new':added,'existing':existing,'state':'名義・整合性確認済み'})
+                        state='名義・整合性確認済み'
+                        items=getattr(doc,'items',())
+                        if kind=='notice' and isinstance(items,(tuple,list)) and len(items)>1:
+                            state+=f'（{len(items)}明細：追加{added}・登録済み{existing}）'
+                        proposal.append({'account':account,'name':path.name,'kind':kind,'new':added,'existing':existing,'state':state})
                 after=(len(stage.records()),len(activities.events()),len(activities.balances()))
                 summary.new_trades=after[0]-before[0];summary.new_cash_or_splits=after[1]-before[1];summary.balance_reports=after[2]-before[2]
                 if current_only and reference_refresh is not None and reference_ready:
@@ -357,6 +365,10 @@ class Workflow:
         try:
             if fingerprint(live.db)!=expected:raise UpdateError('LEDGER_CHANGED','確認中に台帳が別の操作で更新されました。今回の登録を止めました。再実行してください。')
             tables=TABLES
+            if stage.db.execute("SELECT 1 FROM sqlite_master WHERE name='activity_documents'").fetchone():
+                from activity import init_notice_tables
+                init_notice_tables(live.db)
+                tables=tables+('activity_documents','activity_file_events')
             if stage.db.execute("SELECT 1 FROM sqlite_master WHERE name='current_acquisitions'").fetchone():
                 from current_capture import init_current_capture
                 init_current_capture(live,commit=False)

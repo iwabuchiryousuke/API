@@ -176,7 +176,8 @@ def _apply(store,actions,account,kind,doc):
     if kind=='notice':
         preview=actions.preview_notice(account,doc)
         actions.import_notice(account,doc)
-        return (0 if preview['already'] or preview['same_event'] else 1),int(preview['same_event']),preview['already']
+        return (preview.get('new',0 if preview['already'] or preview['same_event'] else 1),
+                preview.get('existing',int(preview['same_event'])),preview['already'])
     exists=actions.db.execute('SELECT 1 FROM balance_reports WHERE account=? AND digest=?',(account,doc.digest)).fetchone()
     actions.import_balance(account,doc)
     return int(not exists),0,bool(exists)

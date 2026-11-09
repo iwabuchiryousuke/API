@@ -1,13 +1,13 @@
 {
-  "version": "3.6.2",
-  "baseline_commit": "3f89a28b4fd774ee0b5b200f2b08f33c3ee27404",
-  "tests": 1148,
+  "version": "3.6.3",
+  "baseline_commit": "47f6353c51a80a4e488f5aa14e38b1b7f92b671b",
+  "tests": 1185,
   "failures": 0,
   "errors": 0,
   "skipped": 0,
   "expected_failures": 0,
   "unexpected_successes": 0,
-  "seconds": 227.274,
+  "seconds": 223.559,
   "successful": true,
   "offline_browser_tests": 73,
   "actual_office_tests": 6,
@@ -15,90 +15,41 @@
   "browser_named_module_tests": 65,
   "browser_count_source": "independent fixture-class discovery; no skipped tests",
   "test_source": "isolated code release ZIP; subsequent result-documentation-only rebuild",
-  "formatting": {
-    "source_template_sha256": "2d6911cca72c23467abc383b996458cdc27d4cf1695cf6728b3d58eb0c640449",
-    "semantic_cell_count": 541,
-    "column_width_count": 43,
-    "deviations": 0,
-    "no_frozen_panes": true,
-    "exact_fonts_fills_alignments_borders": true,
-    "row_height": 20.1,
-    "zoom_percent": {
-      "取引": 73,
-      "配当": 86
-    },
-    "automatic_row_or_column_resizing": false,
-    "intentional_exceptions": [
-      "Calendar dates use m/d per latest request",
-      "Calendar N uses plain numeric format for both actual and forecast",
-      "Dividend X header is 月初終値",
-      "W/X notes disclose observed price dates",
-      "Calendar membership omits only verified zero current holdings"
-    ],
-    "external_workbook_references": 0
+  "fix": {
+    "multi_security_dividend_notices_import_all_items": true,
+    "legacy_first_only_pdf_marks_rechecked": true,
+    "existing_events_reused_missing_only_added": true,
+    "independent_date_code_money_and_custody_coverage_checks": true,
+    "receipt_total_checked_when_unambiguous": true,
+    "all_items_and_verified_completion_saved_atomically": true,
+    "schema_created_only_during_confirmed_import": true,
+    "existing_event_keys_ids_payloads_and_legacy_file_anchor_preserved": true,
+    "parser_revision": 2,
+    "fully_verified_notice_hashes_only_skipped": true
   },
-  "app": {
-    "primary_action": "全データ自動取得",
-    "primary_button_compact": true,
-    "single_row_actions": [
-      "保存PDFを反映",
-      "銘柄設定",
-      "出力フォルダを開く",
-      "父のPDF取り込み",
-      "税還・利息を手動で追加"
-    ],
-    "month_filter_removed": true,
-    "all_registered_data_exported": true,
-    "trade_and_upcoming_schedule_resizable_side_by_side": true,
-    "calendar_refresh_local_only": true,
-    "settings_menu_items": 5
-  },
-  "calendar": {
-    "verified_zero_current_holdings_omitted": true,
-    "unknown_holdings_not_assumed_zero": true,
-    "actual_receipts_and_cumulative_totals_retained": true,
-    "app_upcoming_only": true,
-    "nearest_dates_first": true,
-    "current_jst_year_only": true,
-    "amounts_numeric_without_suffix": true,
-    "actual_and_forecast_provenance_retained": true,
-    "all_next_calendar_month_events_red": true
-  },
-  "prices": {
-    "month_open_policy": "first JPX trading day in month",
-    "distinct_month_open_close_fields": true,
-    "legacy_literal_day_one_fields_preserved": true,
-    "expected_quote_date_required": true,
-    "dated_nonempty_source_required": true,
-    "later_bar_never_substituted": true,
-    "before_16_jst_opening_bar_not_used": true,
-    "utc_daily_index_normalized_to_jst": true,
-    "actual_price_date_and_source_in_cell_notes": true,
-    "existing_month_end_and_verified_manual_prices_preserved": true,
-    "calendar_rule_years": [
-      2025,
-      2099
-    ],
-    "calendar_examples": {
-      "2026-11": "2026-11-02",
-      "2026-01": "2026-01-05",
-      "2027-05": "2027-05-06"
-    },
-    "live_market_values_verified": false,
-    "live_access_attempts": [
-      {
-        "url": "https://finance.yahoo.co.jp/quote/6501.T/history",
-        "response_received": false,
-        "transport_result": "Configured proxy rejected CONNECT with HTTP 403",
-        "live_market_values_verified": false
-      },
-      {
-        "url": "https://jp.investing.com/equities/disco-corp-dividends",
-        "response_received": false,
-        "transport_result": "Configured proxy rejected CONNECT with HTTP 403",
-        "live_market_values_verified": false
-      }
-    ]
+  "uploaded_notice_recovery": {
+    "actual_pdf_item_count": 2,
+    "legacy_first_item_only_reproduced": true,
+    "original_first_payload_preserved": true,
+    "recovered_missing_event_count": 1,
+    "event_count_after_recovery": 2,
+    "replay_added": 0,
+    "original_first_event_identity_and_payload_preserved": true,
+    "foreign_keys_valid": true,
+    "original_file_anchor_identity_preserved": true,
+    "completed_multi_item_manifest_durable": true,
+    "excel_detail_one_to_two": true,
+    "both_excel_items_equal_pdf": true,
+    "sold_out_security_kept_in_income_only": true,
+    "workbook_geometry_preserved": true,
+    "actual_office_cumulative_delta_matches_missing_pdf_net": true,
+    "actual_office_first_and_both_receipt_totals_exact": true,
+    "actual_office_security_cumulative_matches_second_pdf_net": true,
+    "actual_office_formula_errors": 0,
+    "uploaded_pdf_and_excel_bytes_unchanged": true,
+    "generated_private_workbooks_removed": true,
+    "production_files_modified": false,
+    "passed": true
   },
   "source_data": {
     "original_files_unchanged": 254,
@@ -107,39 +58,28 @@
     "supported_documents": 59,
     "retained_documents": 40,
     "critical_errors": 0,
-    "raw_trade_signatures_preserved": true,
-    "raw_activity_keys_preserved": true,
+    "original_trade_count": 28,
+    "original_activity_count": 18,
+    "original_notice_documents": 18,
+    "original_notice_items": 18,
+    "original_ids_and_payload_bytes_preserved": true,
+    "no_false_new_cash_events": true,
     "repeat_no_duplicates": true,
     "cancellation_database_bytes_unchanged": true,
     "current_user_database_fully_verified": false
   },
-  "attached_workbook": {
-    "input_rows": 82,
-    "grouped_rows": 62,
-    "merged_rows": 20,
-    "group_keys_and_quantities_cash_and_member_counts_match": true,
-    "every_source_row_accounted_for_once": true,
-    "blank_styled_rows_ignored": 4,
-    "source_workbook_bytes_unchanged": true,
-    "source_only_used_for_grouping_not_imported": true
+  "excel": {
+    "layout_and_formulas_unchanged": true,
+    "actual_uploaded_pdf_detail_and_totals_match": true,
+    "actual_office_recalculated": true,
+    "formula_errors": 0
   },
-  "synthetic_example": {
-    "path": "dist/出力見本_v3.6.2.xlsx",
-    "sha256": "ed7fbf3c9593e6c6b8d8f552472c895d7be7ba55df0067874283b6a585192366",
-    "wholly_synthetic": true,
-    "formula_caches": 113,
-    "formula_errors": 0,
-    "source_template_deviations": 0,
-    "metadata_marks_fictional": true,
-    "verified_zero_calendar_omitted_income_retained": true,
-    "unknown_holding_retained_without_fake_forecast": true,
-    "price_date_comments_verified": true
-  },
+  "app_layout_unchanged": true,
   "new_runtime_dependencies": false,
   "release_upgrade": {
-    "from_version": "3.6.1",
-    "to_version": "3.6.2",
-    "changed_files": 27,
+    "from_version": "3.6.2",
+    "to_version": "3.6.3",
+    "changed_files": 14,
     "manifest_verified": true,
     "repeat_no_changes": true,
     "backup_manifest_present": true,
@@ -147,17 +87,18 @@
     "protected_fixture_hashes_unchanged": true,
     "protected_fixture_files": 22
   },
+  "uploaded_financial_files_published": false,
   "live_sbi_tested": false,
   "live_gmail_tested": false,
   "windows_tested": false,
   "microsoft_excel_tested": false,
-  "code_zip_sha256": "4fb492315588d8ff50e97f9efb7983207cd3b709aa7c76ab3fb45abd33685f6c",
-  "code_zip_bytes": 644130,
-  "code_zip_entries": 196,
+  "code_zip_sha256": "2f75dfab4bdd146b13618965648f1ac64c09ddbc50ed07aff45170dfbd1cee77",
+  "code_zip_bytes": 664258,
+  "code_zip_entries": 201,
   "manifest_verified": true,
   "private_payloads_in_code_zip": 0,
   "runtime_and_tests_match_verified_package": true,
   "post_test_documentation_changes": [
-    "検証結果_v3.6.2.md"
+    "検証結果_v3.6.3.md"
   ]
 }

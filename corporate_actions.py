@@ -10,6 +10,10 @@ from ledger import LedgerError, decimal_text, parse_date
 from pdf_common import compact_text, load_pdf, normalize_text
 
 
+# Increment when a saved notice needs to be parsed again before it is complete.
+NOTICE_PARSER_REVISION = 2
+
+
 def number(value):
     return decimal_text(normalize_text(value))
 
@@ -26,6 +30,7 @@ class Document:
     digest: str
     owner: str
     item: dict
+    items: tuple[dict, ...] = ()
 
 
 def _read(path):
@@ -53,50 +58,90 @@ def parse_notice(path):
     owner = _owner(text)
 
     if "株式等配当金のお知らせ" in compact or "株式等利益剰余金配当金のお知らせ" in compact:
-        # One issue followed by payment date, per-share dividend and shares;
-        # then gross, withholding fields and net receipt.
+        # A single SBI page can contain several securities. The PDF digest is
+        # evidence for every block, never just the first payment on the page.
         lines = [normalize_text(line) for line in text.splitlines()]
-        row = next(
-            (
-                index
-                for index, line in enumerate(lines)
-                if re.search(r"\d{4}年\s*\d+月\s*\d+日\s+[\d,.]+\s+[\d,]+\s*$", line)
-            ),
-            None,
-        )
-        if row is None or row < 1 or row + 3 >= len(lines):
-            raise LedgerError("配当の日付・株数・金額欄を読み取れません。")
-        date_line = re.search(
-            r"(\d{4}年\s*\d+月\s*\d+日)\s+([\d,.]+)\s+([\d,]+)\s*$", lines[row]
-        )
-        amounts = re.findall(r"[\d,]+", lines[row + 2])
-        if not date_line or len(amounts) != 5:
-            raise LedgerError("配当の税額または受取額の欄が異なります。")
-        name = lines[row - 1].strip()
-        code_match = re.search(r"\(\s*([0-9A-Za-z-]{4,20})\s*\)", lines[row + 1])
-        if not name or not code_match:
-            raise LedgerError("配当の銘柄・コードを読み取れません。")
-        gross, tax1, tax2, tax3, net = map(number, amounts)
-        withholding = sum(map(Decimal, (tax1, tax2, tax3)))
-        if Decimal(gross) - withholding != Decimal(net):
-            raise LedgerError("配当の税引前金額と税額・受取額が一致しません。")
-        event = {
-            "type": "配当",
-            "date": japanese_date(date_line.group(1)),
-            "name": name,
-            "code": code_match.group(1),
-            "quantity": number(date_line.group(3)),
-            "per_share": number(date_line.group(2)),
-            "gross": gross,
-            "tax": number(str(withholding)),
-            "net": net,
-            "custody": "NISA" if "NISA" in compact_text(lines[row + 3]) else "",
-            "currency": "JPY",
+        owners = {
+            compact_text(match.group(1))
+            for line in lines
+            if (match := re.search(r"^(.{2,50}?)\s+様(?:\s|$)", line))
         }
-        if Decimal(event["quantity"]) * Decimal(event["per_share"]) != Decimal(gross):
-            raise LedgerError("配当単価と株数から計算した金額が通知と一致しません。")
+        if len(owners) > 1:
+            raise LedgerError("配当通知に複数の名義があります。口座別の原本を確認してください。")
+        rows = [
+            index for index, line in enumerate(lines)
+            if re.search(r"\d{4}年\s*\d+月\s*\d+日\s+[\d,.]+\s+[\d,]+\s*$", line)
+        ]
+        codes = [index for index, line in enumerate(lines)
+                 if re.fullmatch(r"\s*\(\s*[0-9A-Za-z-]{4,20}\s*\)\s*", line)]
+        money_rows = [index for index, line in enumerate(lines)
+                      if re.fullmatch(r"\s*\d[\d,]*(?:\s+\d[\d,]*){4}\s*", line)]
+        custody_rows = [index for index, line in enumerate(lines)
+                        if re.match(r"\s*(?:NISA|旧NISA|特定|一般|非課税)", line)
+                        and re.search(r"\d{4}年\s*\d+月\s*\d+日", line)]
+        if not rows or any(row < 1 or row + 3 >= len(lines) for row in rows):
+            raise LedgerError("配当の日付・株数・金額欄を読み取れません。")
+        # Refuse partial recognition: a malformed later payment must not leave
+        # an apparently successful first-item-only import again.
+        if (codes != [row + 1 for row in rows]
+                or money_rows != [row + 2 for row in rows]
+                or not set(custody_rows) <= {row + 3 for row in rows}):
+            raise LedgerError("配当の明細数と銘柄・金額・預り欄が一致しません。全明細を確認できないため登録しません。")
+        events = []
+        identities = set()
+        for row in rows:
+            date_line = re.search(
+                r"(\d{4}年\s*\d+月\s*\d+日)\s+([\d,.]+)\s+([\d,]+)\s*$", lines[row]
+            )
+            amounts = re.findall(r"[\d,]+", lines[row + 2])
+            if not date_line or len(amounts) != 5:
+                raise LedgerError("配当の税額または受取額の欄が異なります。")
+            name = lines[row - 1].strip()
+            code_match = re.fullmatch(r"\s*\(\s*([0-9A-Za-z-]{4,20})\s*\)\s*", lines[row + 1])
+            if not name or not code_match:
+                raise LedgerError("配当の銘柄・コードを読み取れません。")
+            gross, tax1, tax2, tax3, net = map(number, amounts)
+            withholding = sum(map(Decimal, (tax1, tax2, tax3)))
+            if Decimal(gross) - withholding != Decimal(net):
+                raise LedgerError("配当の税引前金額と税額・受取額が一致しません。")
+            event = {
+                "type": "配当",
+                "date": japanese_date(date_line.group(1)),
+                "name": name,
+                "code": code_match.group(1),
+                "quantity": number(date_line.group(3)),
+                "per_share": number(date_line.group(2)),
+                "gross": gross,
+                "tax": number(str(withholding)),
+                "net": net,
+                "custody": "NISA" if "NISA" in compact_text(lines[row + 3]) else "",
+                "currency": "JPY",
+            }
+            if Decimal(event["quantity"]) * Decimal(event["per_share"]) != Decimal(gross):
+                raise LedgerError("配当単価と株数から計算した金額が通知と一致しません。")
+            identity = tuple(event[field] for field in
+                             ("date", "code", "quantity", "gross", "net", "custody", "currency"))
+            if identity in identities:
+                raise LedgerError("配当通知に区別できない同一明細が複数あります。原本を確認してください。")
+            identities.add(identity)
+            events.append(event)
+        # Some generators expose the receipt total without its graphical label.
+        # Use a labelled total, or a single unambiguous trailing numeric total,
+        # as a separate check against lost/unreadable later payment blocks.
+        totals = []
+        tail = lines[rows[-1] + 4:]
+        for line in tail:
+            match = re.fullmatch(r"\s*(?:お?受取(?:金)?額(?:合計|総計))\s*[:：]?\s*([\d,]+)\s*", line)
+            if match:totals.append(number(match.group(1)))
+        if not totals:
+            plain = [line.strip() for line in tail if re.fullmatch(r"\s*\d[\d,]*\s*", line)]
+            if len(plain) == 1:totals.append(number(plain[0]))
+        if totals and (len(set(totals)) != 1
+                       or Decimal(totals[0]) != sum((Decimal(event['net']) for event in events), Decimal(0))):
+            raise LedgerError("配当の受取額合計と全明細の合計が一致しません。原本を確認してください。")
         return Document(
-            "dividend_pdf", path.name, raw, hashlib.sha256(raw).hexdigest(), owner, event
+            "dividend_pdf", path.name, raw, hashlib.sha256(raw).hexdigest(), owner,
+            events[0], tuple(events)
         )
 
     if ("割当株式等のお知らせ" in compact or "割当株券のお知らせ" in compact) and "株式分割" in compact:
