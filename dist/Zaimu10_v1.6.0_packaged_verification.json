@@ -1,0 +1,35 @@
+{
+  "app": "/workspace/work/v160_packaged_check/日本語と空白 企業評価/zaimu10_v1.6.0",
+  "setup_actual": true,
+  "self_check": {
+    "application": "Zaimu10",
+    "version": "1.6.0",
+    "python": "3.12.14",
+    "ready": true,
+    "problems": []
+  },
+  "cli_company_query": "図研",
+  "cli_periods": 2,
+  "unit": "million",
+  "sheets": [
+    "PL",
+    "BS-a",
+    "BS-le",
+    "CF",
+    "FR",
+    "DCF",
+    "CAPM",
+    "CAGR"
+  ],
+  "packaged_validator_companies": 9,
+  "packaged_validator_failures": 0,
+  "native_gui": {
+    "title": "企業評価",
+    "tcl": "9.0.4",
+    "tk": "9.0.4",
+    "groups": 8
+  },
+  "manifest_files": 240,
+  "all_manifest_hashes_match": true,
+  "archive_sha256": "a6d0ba07a044db8187cbeef14bf0547a49c7f9c544a7a4ece5503a04df3a2727"
+}
